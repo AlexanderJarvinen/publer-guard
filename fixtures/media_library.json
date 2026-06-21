@@ -1,0 +1,24 @@
+{
+  "_comment": "Fixture for the mocked lookup_media tool. Shape matches the real Publer GET /api/v1/media response (see https://publer.com/docs/api-reference/media). Permanent paths use cdn.publer.com/uploads/...; temporary ones use /uploads/tmp/ and must NEVER appear here. The Fixer queries this by a hint (filename/hash) and either gets a real permanent URL back or None (→ escalate to human).",
+  "media": [
+    {
+      "id": "6a3711e930d9b2bc52422eff",
+      "type": "video",
+      "name": "2084_part2_room101.mp4",
+      "caption": null,
+      "path": "https://cdn.publer.com/uploads/videos/6a3711e930d9b2bc52422eff/84791791ca0c92f1acea4d46a9ead09b.mp4",
+      "created_at": "2026-06-10T22:14:00Z",
+      "in_library": true
+    },
+    {
+      "id": "6a2b5c401b935b23ddb5bc7a",
+      "type": "video",
+      "name": "letargin_teaser.mov",
+      "caption": null,
+      "path": "https://cdn.publer.com/uploads/videos/6a2b5c401b935b23ddb5bc7a/3d7dbbf28c953b558b3c7df085d90a36.mov",
+      "created_at": "2026-06-08T17:02:00Z",
+      "in_library": true
+    }
+  ],
+  "total": 2
+}
