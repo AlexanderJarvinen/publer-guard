@@ -1,0 +1,21 @@
+# Secrets — NEVER commit
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Traces / local run output
+traces/*.json
+outputs/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
