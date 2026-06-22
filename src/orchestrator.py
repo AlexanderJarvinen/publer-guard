@@ -12,10 +12,34 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .agents import CriticAgent, FixerAgent, TriageAgent
+from .agents import (
+    CriticAgent,
+    FixerAgent,
+    TriageAgent,
+    TriageDecision,
+    ViolationRef,
+)
 from .linter import lint_all
 from .state import CsvRow, FixAttempt, FixOutcome, PipelineState, Violation
 from .verifier import Verifier
+
+
+def _fallback_triage(violations: list[Violation]) -> TriageDecision:
+    """
+    Deterministic triage used when the Triage LLM returns unparseable output.
+    Triage is an optimization (ordering + human-only flagging), NOT a hard
+    dependency: auto-fixable violations go to the fixer in input order, the
+    rest are escalated. This keeps the run alive without the LLM.
+    """
+    fix_order = [
+        ViolationRef(rule_id=v.rule_id, row_index=v.row_index)
+        for v in violations if v.auto_fixable
+    ]
+    human_only = [
+        ViolationRef(rule_id=v.rule_id, row_index=v.row_index)
+        for v in violations if not v.auto_fixable
+    ]
+    return TriageDecision(fix_order=fix_order, human_only=human_only)
 
 
 def _find_violation(
@@ -42,8 +66,11 @@ class Orchestrator:
 
     def run(self, state: PipelineState) -> PipelineState:
         # ── Step 1: Lint ──────────────────────────────────────────────────────
+        # Reconstruct 7-column rows matching the Publer export format:
+        # Scheduled Date, Type, Text, Media URL, Hashtags, Tagged Users, Title
+        # (Hashtags are already merged into .text; columns 4-5 are left empty.)
         raw_rows = [
-            [r.date, r.text, r.link, r.media_url, r.title, r.label]
+            [r.date, r.title, r.text, r.media_url, "", "", r.label]
             for r in state.rows
         ]
         state.violations = lint_all(raw_rows, state.rows)
@@ -57,14 +84,28 @@ class Orchestrator:
             return state
 
         # ── Step 2: Triage ────────────────────────────────────────────────────
-        decision = self._triage.triage(state.violations)
-        state.log(
-            "triage",
-            (
-                f"Triage complete: {len(decision.fix_order)} auto-fixable, "
-                f"{len(decision.human_only)} human-only"
-            ),
-        )
+        try:
+            decision = self._triage.triage(state.violations)
+            state.log(
+                "triage",
+                (
+                    f"Triage complete: {len(decision.fix_order)} auto-fixable, "
+                    f"{len(decision.human_only)} human-only"
+                ),
+            )
+        except ValueError as exc:
+            # Caught failure: Triage LLM returned unparseable output. Degrade to
+            # deterministic triage instead of crashing the run (point 5).
+            decision = _fallback_triage(state.violations)
+            state.log(
+                "triage",
+                (
+                    f"Triage LLM output unparseable ({type(exc).__name__}); "
+                    f"fell back to deterministic triage: "
+                    f"{len(decision.fix_order)} auto-fixable, "
+                    f"{len(decision.human_only)} human-only"
+                ),
+            )
 
         # ── Step 3: Escalate human-only violations ───────────────────────────
         for ref in decision.human_only:
@@ -98,6 +139,47 @@ class Orchestrator:
                 continue
             self._fix_violation(state, v)
 
+        # ── Step 5: Final full-file re-lint — safety net beyond Gate 1 ────────
+        # Gate 1 only re-checks the SAME rule on the patched row. A fix can
+        # still introduce a DIFFERENT violation (e.g. trimming a Twitter post
+        # to length turns a flat-URL CTA into a markdown link, breaking
+        # cta_format). A full re-lint of the final rows is the only thing that
+        # catches that class of failure.
+        post_raw = [
+            [r.date, r.title, r.text, r.media_url, "", "", r.label]
+            for r in state.rows
+        ]
+        state.final_violations = lint_all(post_raw, state.rows)
+        initial_keys = {(v.rule_id, v.row_index) for v in state.violations}
+        introduced = [
+            v for v in state.final_violations
+            if (v.rule_id, v.row_index) not in initial_keys
+        ]
+        if introduced:
+            state.log(
+                "relint",
+                f"POST-FIX RE-LINT — {len(introduced)} NEW violation(s) introduced "
+                f"by fixes: "
+                + ", ".join(f"{v.rule_id}@row{v.row_index}" for v in introduced),
+                introduced=[v.model_dump() for v in introduced],
+            )
+        else:
+            remaining = len(state.final_violations)
+            state.log(
+                "relint",
+                f"POST-FIX RE-LINT — no new violations introduced; "
+                f"{remaining} known violation(s) remain (escalated/unfixed).",
+            )
+
+        # ── Step 6: Drain LLM call metrics for monitoring (point 7) ───────────
+        seen_clients: set[int] = set()
+        for agent in (self._triage, self._fixer, self._critic):
+            client = agent.client
+            if id(client) in seen_clients:
+                continue
+            seen_clients.add(id(client))
+            state.metrics.extend(getattr(client, "metrics", []))
+
         return state
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -109,9 +191,39 @@ class Orchestrator:
             row = state.row(violation.row_index)
 
             # ── Fixer ─────────────────────────────────────────────────────────
-            proposal = self._fixer.propose_fix(
-                violation, row, critic_note=critic_note
-            )
+            try:
+                proposal = self._fixer.propose_fix(
+                    violation, row, critic_note=critic_note
+                )
+            except ValueError as exc:
+                # Caught failure: Fixer returned unparseable output (e.g. prose
+                # or broken JSON). Record it, then retry with a corrective note
+                # telling the model to emit bare JSON (point 5).
+                state.log(
+                    "fix",
+                    (
+                        f"Attempt {attempt}/{state.max_retries_per_violation}: "
+                        f"Fixer output unparseable ({type(exc).__name__}) for "
+                        f"{violation.rule_id}@row{violation.row_index} — retrying"
+                    ),
+                    rule_id=violation.rule_id,
+                    row_index=violation.row_index,
+                    attempt=attempt,
+                )
+                state.attempts.append(FixAttempt(
+                    attempt_number=attempt,
+                    rule_id=violation.rule_id,
+                    row_index=violation.row_index,
+                    model_used=FixerAgent.MODEL,
+                    outcome=FixOutcome.UNFIXED,
+                    gate_rejection="unparseable_output",
+                ))
+                critic_note = (
+                    "Your previous response was not valid JSON. Respond with ONLY "
+                    "the JSON object specified in your instructions — no prose, no "
+                    "code fences, nothing else."
+                )
+                continue
             state.log(
                 "fix",
                 (
@@ -199,19 +311,31 @@ class Orchestrator:
 
             if attempt < state.max_retries_per_violation:
                 # ── Critic ────────────────────────────────────────────────────
-                critic_result = self._critic.critique(
-                    violation, row, proposal,
-                    result.gate_failure or "unknown gate failure",
-                )
-                critic_note = (
-                    f"{critic_result.explanation} "
-                    f"Suggestion: {critic_result.suggestion}"
-                )
-                state.log("critic", f"Critic note: {critic_note}")
-                # Attach note to the attempt record for the trace
-                state.attempts[-1] = state.attempts[-1].model_copy(
-                    update={"critic_note": critic_note}
-                )
+                try:
+                    critic_result = self._critic.critique(
+                        violation, row, proposal,
+                        result.gate_failure or "unknown gate failure",
+                    )
+                    critic_note = (
+                        f"{critic_result.explanation} "
+                        f"Suggestion: {critic_result.suggestion}"
+                    )
+                    state.log("critic", f"Critic note: {critic_note}")
+                    # Attach note to the attempt record for the trace
+                    state.attempts[-1] = state.attempts[-1].model_copy(
+                        update={"critic_note": critic_note}
+                    )
+                except ValueError as exc:
+                    # Caught failure: Critic output unparseable. Non-critical —
+                    # retry the Fixer without a note rather than crash.
+                    critic_note = None
+                    state.log(
+                        "critic",
+                        (
+                            f"Critic output unparseable ({type(exc).__name__}); "
+                            f"retrying Fixer without a critic note"
+                        ),
+                    )
 
         # ── All retries exhausted ─────────────────────────────────────────────
         state.log(

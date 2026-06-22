@@ -45,22 +45,27 @@ _CDN_2084 = (
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _load_csv(name: str, platform: Platform) -> list[CsvRow]:
+    """Load 7-column Publer export CSV: Scheduled Date, Type, Text, Media URL, Hashtags, Tagged Users, Title."""
     path = EVAL_DIR / name
     rows: list[CsvRow] = []
     with path.open(encoding="utf-8-sig") as f:
         reader = csv.reader(f)
         next(reader)  # skip header
         for idx, fields in enumerate(reader):
-            padded = (fields + [""] * 6)[:6]
+            padded = (fields + [""] * 7)[:7]
+            text = padded[2].strip()
+            hashtags = padded[4].strip()
+            if hashtags:
+                text = text + "\n\n" + hashtags
             rows.append(CsvRow(
                 row_index=idx,
                 platform=platform,
-                date=padded[0],
-                text=padded[1],
-                link=padded[2],
-                media_url=padded[3],
-                title=padded[4],
-                label=padded[5],
+                date=padded[0].strip(),
+                text=text,
+                link="",
+                media_url=padded[3].strip(),
+                title=padded[1].strip(),
+                label=padded[6].strip(),
             ))
     return rows
 
@@ -137,15 +142,6 @@ def _triage_resp(fix_order=None, human_only=None) -> str:
     })
 
 
-def _fixer_clear_link() -> str:
-    return json.dumps({
-        "action": "clear_link",
-        "new_text": None,
-        "lookup_hint": None,
-        "reason": "Clearing non-empty Link column to fix Publer import error.",
-    })
-
-
 def _fixer_edit_text(new_text: str, reason: str = "fixed") -> str:
     return json.dumps({
         "action": "edit_text",
@@ -187,13 +183,16 @@ def case_01_clean() -> tuple[PipelineState, Expectation]:
     return state, exp
 
 
-# ── Case 02: link_empty — fixed first try ────────────────────────────────────
+# ── Case 02: no_cyrillic — Russian text on Facebook, fixed first try ─────────
 
-def case_02_link_clear() -> tuple[PipelineState, Expectation]:
-    rows = _load_csv("02_link_clear.csv", Platform.FACEBOOK)
+def case_02_no_cyrillic() -> tuple[PipelineState, Expectation]:
+    rows = _load_csv("02_no_cyrillic.csv", Platform.FACEBOOK)
+    transliterated = (
+        "Novaya glava uzhe vyshla. IG: instagram.com/alex_y_yarvinen\n\n#metal"
+    )
     llm_responses = [
-        _triage_resp(fix_order=[{"rule_id": "link_empty", "row_index": 0}]),
-        _fixer_clear_link(),
+        _triage_resp(fix_order=[{"rule_id": "no_cyrillic", "row_index": 0}]),
+        _fixer_edit_text(transliterated, "Transliterated Cyrillic to Latin script."),
     ]
     fake = FakeLLMClient(llm_responses)
     orch = Orchestrator(
@@ -351,7 +350,7 @@ def case_06_lookup_not_found() -> tuple[PipelineState, Expectation]:
 
 CASES = [
     ("01_clean",              case_01_clean,         "0 violations - clean pass"),
-    ("02_link_clear",         case_02_link_clear,    "link_empty fixed first try"),
+    ("02_no_cyrillic",        case_02_no_cyrillic,   "no_cyrillic fixed first try"),
     ("03_tmp_url_found",      case_03_tmp_url_found, "media_url_permanent fixed via lookup_media"),
     ("04_twitter_length",     case_04_twitter_length,"twitter_length fixed first try"),
     ("05_hashtags_critic",    case_05_hashtags_critic,"hashtags_2084 fixed on 2nd attempt (Critic path)"),

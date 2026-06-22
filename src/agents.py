@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import time
 from typing import Literal, Optional, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel, ValidationError
 
-from .state import CsvRow, Violation
+from .state import CallMetric, CsvRow, Violation
 
 
 # ---------------------------------------------------------------------------
@@ -95,14 +97,25 @@ class AnthropicClient:
 
         import anthropic  # lazy import — never pulled in by tests
         self._client = anthropic.Anthropic(api_key=api_key)
+        self.metrics: list[CallMetric] = []
 
     def complete(self, *, model: str, system: str, user: str) -> str:
+        start = time.perf_counter()
         msg = self._client.messages.create(
             model=model,
             max_tokens=1024,
             system=system,
             messages=[{"role": "user", "content": user}],
         )
+        latency_ms = (time.perf_counter() - start) * 1000.0
+        usage = getattr(msg, "usage", None)
+        self.metrics.append(CallMetric(
+            model=model,
+            input_tokens=getattr(usage, "input_tokens", 0) or 0,
+            output_tokens=getattr(usage, "output_tokens", 0) or 0,
+            latency_ms=round(latency_ms, 1),
+            estimated=False,
+        ))
         return msg.content[0].text
 
 
@@ -123,6 +136,7 @@ class FakeLLMClient:
         self.last_system: str = ""
         self.last_user: str = ""
         self.call_count: int = 0
+        self.metrics: list[CallMetric] = []
 
     def complete(self, *, model: str, system: str, user: str) -> str:
         self.last_model = model
@@ -134,7 +148,17 @@ class FakeLLMClient:
                 "FakeLLMClient: response queue exhausted. "
                 "Add more canned responses to the test."
             )
-        return self._queue.pop(0)
+        response = self._queue.pop(0)
+        # Tokens approximated from text length (~4 chars/token); estimated=True
+        # so monitoring output is clearly flagged as illustrative, not billed.
+        self.metrics.append(CallMetric(
+            model=model,
+            input_tokens=(len(system) + len(user)) // 4,
+            output_tokens=len(response) // 4,
+            latency_ms=0.0,
+            estimated=True,
+        ))
+        return response
 
 
 # ---------------------------------------------------------------------------
@@ -144,10 +168,31 @@ class FakeLLMClient:
 _T = TypeVar("_T", bound=BaseModel)
 
 
+def _extract_json(raw: str) -> str:
+    """
+    Best-effort recovery of a JSON object from a model response.
+
+    The system prompts demand bare JSON, but a real model occasionally wraps
+    it in ```code fences``` or adds a sentence of preamble. We strip fences and
+    slice to the outermost {...} so a cosmetically-dirty-but-valid response
+    still parses. Genuinely malformed output still fails downstream and is
+    handled as a caught failure by the orchestrator (retry / fallback).
+    """
+    s = raw.strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z0-9]*\s*", "", s)
+        s = re.sub(r"\s*```$", "", s).strip()
+    start, end = s.find("{"), s.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        s = s[start:end + 1]
+    return s
+
+
 def _parse_or_raise(raw: str, model_cls: type[_T], agent_name: str) -> _T:
     """Parse raw JSON string into model_cls; re-raise as ValueError with context."""
+    cleaned = _extract_json(raw)
     try:
-        return model_cls.model_validate_json(raw)
+        return model_cls.model_validate_json(cleaned)
     except ValidationError as exc:
         raise ValueError(
             f"{agent_name}: response could not be parsed as {model_cls.__name__}.\n"
@@ -275,6 +320,10 @@ class TriageAgent:
     def __init__(self, client: LLMClient) -> None:
         self._client = client
 
+    @property
+    def client(self) -> LLMClient:
+        return self._client
+
     def triage(self, violations: list[Violation]) -> TriageDecision:
         compact = [
             {
@@ -304,6 +353,10 @@ class FixerAgent:
 
     def __init__(self, client: LLMClient) -> None:
         self._client = client
+
+    @property
+    def client(self) -> LLMClient:
+        return self._client
 
     def propose_fix(
         self,
@@ -346,6 +399,10 @@ class CriticAgent:
 
     def __init__(self, client: LLMClient) -> None:
         self._client = client
+
+    @property
+    def client(self) -> LLMClient:
+        return self._client
 
     def critique(
         self,

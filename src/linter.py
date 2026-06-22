@@ -20,8 +20,8 @@ from .state import CsvRow, Platform, Severity, Violation, _extract_hashtags
 # Constants
 # ---------------------------------------------------------------------------
 
-_DATE_FORMAT = "%Y/%m/%d %H:%M"
-_EXPECTED_COLUMNS = 6
+_DATE_FORMAT = "%Y-%m-%d %H:%M"
+_EXPECTED_COLUMNS = 7
 _TWITTER_MAX_CHARS = 280
 
 # 2084 series: Label contains this string (case-insensitive) — user-tunable here
@@ -63,7 +63,7 @@ def check_column_count(raw_rows: list[list[str]]) -> list[Violation]:
                 message=(
                     f"Row {row_index} has {len(fields)} columns; "
                     f"expected {_EXPECTED_COLUMNS} "
-                    f"(Date, Text, Link, Media URL, Title, Label)."
+                    f"(Scheduled Date, Type, Text, Media URL, Hashtags, Tagged Users, Title)."
                 ),
                 auto_fixable=False,
             ))
@@ -75,7 +75,7 @@ def check_column_count(raw_rows: list[list[str]]) -> list[Violation]:
 # ---------------------------------------------------------------------------
 
 def check_date_format(row: CsvRow) -> list[Violation]:
-    """Date must parse as YYYY/MM/DD HH:MM."""
+    """Date must parse as YYYY-MM-DD HH:MM."""
     try:
         datetime.strptime(row.date.strip(), _DATE_FORMAT)
         return []
@@ -86,7 +86,7 @@ def check_date_format(row: CsvRow) -> list[Violation]:
             severity=Severity.ERROR,
             message=(
                 f"Row {row.row_index}: date {row.date!r} is not in "
-                f"'YYYY/MM/DD HH:MM' format (e.g. '2026/06/24 18:00')."
+                f"'YYYY-MM-DD HH:MM' format (e.g. '2026-06-24 18:00')."
             ),
             # Rewriting a date in an ambiguous wrong format (e.g. "06-24-2026") requires
             # human judgment — Jan 2 vs Feb 1 cannot be resolved without context.

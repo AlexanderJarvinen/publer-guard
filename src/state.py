@@ -111,6 +111,21 @@ class TraceEvent(BaseModel):
     payload: dict = Field(default_factory=dict)
 
 
+class CallMetric(BaseModel):
+    """
+    One LLM call's cost/latency record — the raw material for production
+    monitoring (point 7). Appended by the LLM client on every call.
+    `estimated` is True for the FakeLLMClient (token counts approximated from
+    text length, no network latency) and False for real Anthropic calls,
+    where the counts come from the API `usage` object.
+    """
+    model: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    latency_ms: float = 0.0
+    estimated: bool = False
+
+
 class PipelineState(BaseModel):
     """
     The whole run. The orchestrator owns this; sub-agents get slices.
@@ -121,6 +136,9 @@ class PipelineState(BaseModel):
     trace: list[TraceEvent] = Field(default_factory=list)
     escalations: list[Violation] = Field(default_factory=list)
     max_retries_per_violation: int = 2
+    # Populated at the end of a run by the orchestrator:
+    metrics: list[CallMetric] = Field(default_factory=list)          # point 7: cost/latency
+    final_violations: list[Violation] = Field(default_factory=list)  # full post-fix re-lint
 
     # ---- helpers the orchestrator uses; keep logic out of agents ----
 
