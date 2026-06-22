@@ -49,8 +49,14 @@ All are **ERROR** severity (they block publish and the Fixer attempts them):
    - `INSTAGRAM_FUNNEL` (the @alex_y_yarvinen account itself): NO CTA at all
 7. `hashtags_2084` — if the row is part of the 2084 series, the required
    hashtag set must be present in Text.
-8. `serbian_diacritics` — Serbian text uses Latin script WITH diacritics
-   (š, ž, č, ć, đ) and must contain no Cyrillic.
+8. `no_cyrillic` — Latin script required on every platform EXCEPT Telegram.
+   Telegram is intentionally a Russian-language channel, so Cyrillic is
+   legitimate there and the rule is skipped. On all other platforms,
+   any Cyrillic character is an ERROR (e.g. Serbian text left in Cyrillic
+   instead of Latin). Deliberately narrow: full Serbian-diacritics
+   validation needs language detection, which can't be grounded without an
+   LLM judgment, so it's out of scope on purpose — Cyrillic presence is a
+   fact; "is this correct Serbian" is not.
 
 ### 2084 series detection (CONFIRMED)
 A row belongs to the 2084 series iff its **Label** contains `2084`
