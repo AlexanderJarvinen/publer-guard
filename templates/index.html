@@ -279,7 +279,7 @@
               <th>Строка</th>
               <th>Описание</th>
               <th>Статус</th>
-              <th>Предложенный фикс</th>
+              <th>Причина / фикс</th>
             </tr>
           </thead>
           <tbody id="violations-body"></tbody>
@@ -291,6 +291,12 @@
     <div class="card" id="lint-card">
       <h2>Пост-ремонт релинт</h2>
       <div class="lint-status" id="lint-status"></div>
+    </div>
+
+    <!-- Monitoring -->
+    <div class="card" id="monitoring-card">
+      <h2>LLM-вызовы</h2>
+      <div id="monitoring-body"></div>
     </div>
 
     <!-- Download -->
@@ -403,15 +409,22 @@
         const key = `${v.rule_id}:${v.row_index}`;
         const attempt = final[key];
         const outcome = attempt ? attempt.outcome : '—';
-        const proposed = attempt && attempt.proposed_text
-          ? attempt.proposed_text.substring(0, 120) + (attempt.proposed_text.length > 120 ? '…' : '')
-          : '—';
+
+        // Last column: for escalated show gate_rejection reason; for others show proposed text
+        let detail = '—';
+        if (attempt && attempt.outcome === 'escalated' && attempt.gate_rejection) {
+          detail = `<span style="color:var(--yellow-t);font-size:12px">${escHtml(attempt.gate_rejection)}</span>`;
+        } else if (attempt && attempt.proposed_text) {
+          const t = attempt.proposed_text;
+          detail = `<span class="proposed">${escHtml(t.length > 120 ? t.substring(0, 120) + '…' : t)}</span>`;
+        }
+
         return `<tr>
           <td><span class="rule-id">${v.rule_id}</span></td>
-          <td><span class="row-idx">#${v.row_index + 1}</span></td>
+          <td><span class="row-idx">row ${v.row_index}</span></td>
           <td><span class="msg">${escHtml(v.message)}</span></td>
           <td>${badge(outcome)}</td>
-          <td><span class="proposed">${escHtml(proposed)}</span></td>
+          <td>${detail}</td>
         </tr>`;
       }).join('');
       el('violations-body').innerHTML = rows;
@@ -431,6 +444,29 @@
         `<div class="dot red" style="background:var(--yellow-t)"></div>
          <span>${pfl.residual_known} известных нарушений остались (эскалация/не исправлены)</span>`;
     }
+
+    // Monitoring
+    const mon = data.monitoring;
+    const estimated = mon.tokens_estimated ? ' <span style="color:var(--muted)">(estimated)</span>' : '';
+    const byModel = Object.entries(mon.by_model || {}).map(([model, m]) =>
+      `<tr>
+        <td style="font-family:monospace;font-size:12px;color:var(--accent)">${model}</td>
+        <td>${m.calls}</td>
+        <td>${m.input_tokens} / ${m.output_tokens}</td>
+        <td>$${m.est_cost_usd.toFixed(5)}</td>
+      </tr>`
+    ).join('');
+    el('monitoring-body').innerHTML = `
+      <div style="display:flex;gap:24px;margin-bottom:14px;font-size:13px">
+        <span>Вызовов: <b>${mon.total_calls}</b></span>
+        <span>Токены in/out: <b>${mon.total_input_tokens} / ${mon.total_output_tokens}</b>${estimated}</span>
+        <span>Стоимость: <b>$${mon.est_cost_usd.toFixed(5)}</b></span>
+      </div>
+      ${byModel ? `<div class="table-wrap"><table>
+        <thead><tr><th>Модель</th><th>Вызовов</th><th>Токены in/out</th><th>Стоимость</th></tr></thead>
+        <tbody>${byModel}</tbody>
+      </table></div>` : ''}
+    `;
 
     // Download link
     el('dl-link').href = '/download/' + encodeURIComponent(data.fixed_csv);
