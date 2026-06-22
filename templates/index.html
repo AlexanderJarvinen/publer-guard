@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>publer-guard</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0f0f0f;
+      --surface:  #1a1a1a;
+      --border:   #2a2a2a;
+      --text:     #e0e0e0;
+      --muted:    #666;
+      --accent:   #c47a00;
+      --accent-h: #e08f00;
+      --green:    #2a7a3b;
+      --green-t:  #4ade7b;
+      --red:      #7a2a2a;
+      --red-t:    #f87171;
+      --yellow:   #6b5a00;
+      --yellow-t: #fbbf24;
+      --radius:   8px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    .container { max-width: 860px; margin: 0 auto; padding: 40px 20px 80px; }
+
+    /* ── Header ── */
+    header { margin-bottom: 36px; }
+    header h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
+    header h1 span { color: var(--accent); }
+    header p { color: var(--muted); margin-top: 4px; font-size: 13px; }
+
+    /* ── Card ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+    .card h2 { font-size: 13px; font-weight: 600; text-transform: uppercase;
+               letter-spacing: 0.08em; color: var(--muted); margin-bottom: 16px; }
+
+    /* ── Form ── */
+    .fields { display: grid; grid-template-columns: 1fr 200px; gap: 12px; align-items: end; }
+    @media (max-width: 600px) { .fields { grid-template-columns: 1fr; } }
+
+    label { display: block; font-size: 12px; color: var(--muted);
+            margin-bottom: 6px; font-weight: 500; }
+
+    .file-wrap {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 14px;
+      cursor: pointer;
+      transition: border-color .15s;
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .file-wrap:hover { border-color: var(--accent); }
+    .file-wrap.has-file { color: var(--text); border-color: #444; }
+    #file-input { display: none; }
+
+    select {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      padding: 10px 14px;
+      font-size: 13px;
+      appearance: none;
+      cursor: pointer;
+    }
+    select:focus { outline: none; border-color: var(--accent); }
+
+    .btn-row { margin-top: 16px; display: flex; gap: 10px; align-items: center; }
+
+    button {
+      background: var(--accent);
+      color: #000;
+      border: none;
+      border-radius: var(--radius);
+      padding: 10px 24px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    button:hover:not(:disabled) { background: var(--accent-h); }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+
+    /* ── Spinner ── */
+    .spinner {
+      display: none;
+      width: 18px; height: 18px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+    }
+    .spinner.active { display: block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Summary cards ── */
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .stat {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      text-align: center;
+    }
+    .stat .num { font-size: 28px; font-weight: 700; line-height: 1; }
+    .stat .lbl { font-size: 11px; color: var(--muted); margin-top: 4px;
+                 text-transform: uppercase; letter-spacing: .06em; }
+    .stat.green .num { color: var(--green-t); }
+    .stat.red   .num { color: var(--red-t); }
+    .stat.yellow .num { color: var(--yellow-t); }
+
+    /* ── Badge ── */
+    .badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+    .badge.fixed    { background: var(--green); color: var(--green-t); }
+    .badge.escalated{ background: var(--yellow); color: var(--yellow-t); }
+    .badge.unfixed  { background: var(--red); color: var(--red-t); }
+
+    /* ── Table ── */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th {
+      text-align: left;
+      padding: 8px 12px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+    }
+    td { padding: 10px 12px; border-bottom: 1px solid #1f1f1f; vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #1f1f1f; }
+
+    .rule-id { font-family: monospace; font-size: 12px; color: var(--accent); }
+    .row-idx { color: var(--muted); font-size: 12px; }
+    .msg { color: #bbb; line-height: 1.4; }
+    .proposed { color: #888; font-size: 12px; font-style: italic; max-width: 280px;
+                white-space: pre-wrap; word-break: break-word; }
+
+    /* ── Post-fix lint ── */
+    .lint-status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+    }
+    .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .dot.green { background: var(--green-t); }
+    .dot.red   { background: var(--red-t); }
+
+    /* ── Download ── */
+    .dl-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: transparent;
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      border-radius: var(--radius);
+      padding: 8px 18px;
+      font-size: 13px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: background .15s;
+    }
+    .dl-btn:hover { background: #1f1500; }
+
+    /* ── Error ── */
+    .error-box {
+      background: var(--red);
+      border: 1px solid #a03030;
+      border-radius: var(--radius);
+      padding: 14px 18px;
+      color: var(--red-t);
+      font-size: 13px;
+    }
+
+    /* ── Hidden ── */
+    .hidden { display: none !important; }
+
+    .rate-note { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <header>
+    <h1>publer<span>-guard</span></h1>
+    <p>Валидация и авто-ремонт Publer CSV перед публикацией</p>
+  </header>
+
+  <!-- ── Upload form ── -->
+  <div class="card">
+    <h2>Входные данные</h2>
+    <div class="fields">
+      <div>
+        <label>CSV файл</label>
+        <div class="file-wrap" id="file-label" onclick="document.getElementById('file-input').click()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <span id="file-name">Выберите файл…</span>
+        </div>
+        <input type="file" id="file-input" accept=".csv">
+      </div>
+      <div>
+        <label>Платформа</label>
+        <select id="platform">
+          {% for p in platforms %}
+          <option value="{{ p }}"{% if p == 'facebook' %} selected{% endif %}>{{ p }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button id="run-btn" onclick="runPipeline()">Валидировать</button>
+      <div class="spinner" id="spinner"></div>
+      <span id="run-status" style="color:var(--muted);font-size:13px;"></span>
+    </div>
+  </div>
+
+  <!-- ── Error ── -->
+  <div class="error-box hidden" id="error-box"></div>
+
+  <!-- ── Results ── -->
+  <div id="results" class="hidden">
+
+    <!-- Summary -->
+    <div class="summary-grid" id="summary-grid"></div>
+
+    <!-- Violations table -->
+    <div class="card" id="violations-card">
+      <h2>Нарушения</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Правило</th>
+              <th>Строка</th>
+              <th>Описание</th>
+              <th>Статус</th>
+              <th>Предложенный фикс</th>
+            </tr>
+          </thead>
+          <tbody id="violations-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Post-fix lint -->
+    <div class="card" id="lint-card">
+      <h2>Пост-ремонт релинт</h2>
+      <div class="lint-status" id="lint-status"></div>
+    </div>
+
+    <!-- Download -->
+    <div class="card">
+      <h2>Результат</h2>
+      <a id="dl-link" class="dl-btn" href="#">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        Скачать исправленный CSV
+      </a>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  // ── File picker ──────────────────────────────────────────────────────────────
+  document.getElementById('file-input').addEventListener('change', function () {
+    const wrap = document.getElementById('file-label');
+    const span = document.getElementById('file-name');
+    if (this.files.length) {
+      span.textContent = this.files[0].name;
+      wrap.classList.add('has-file');
+    }
+  });
+
+  // ── Helpers ─────────────────────────────────────────────────────────────────
+  function el(id) { return document.getElementById(id); }
+  function show(id) { el(id).classList.remove('hidden'); }
+  function hide(id) { el(id).classList.add('hidden'); }
+
+  function badge(outcome) {
+    const map = { fixed: 'Исправлено', escalated: 'Эскалация', unfixed: 'Не исправлено' };
+    return `<span class="badge ${outcome}">${map[outcome] || outcome}</span>`;
+  }
+
+  // Build a map: "rule_id:row_index" → last attempt
+  function finalAttempts(attempts) {
+    const map = {};
+    for (const a of attempts) map[`${a.rule_id}:${a.row_index}`] = a;
+    return map;
+  }
+
+  // ── Main pipeline call ───────────────────────────────────────────────────────
+  async function runPipeline() {
+    const fileInput = el('file-input');
+    if (!fileInput.files.length) {
+      alert('Выберите CSV файл');
+      return;
+    }
+
+    // UI: loading state
+    el('run-btn').disabled = true;
+    el('spinner').classList.add('active');
+    el('run-status').textContent = 'Запускаем pipeline…';
+    hide('results');
+    hide('error-box');
+
+    const form = new FormData();
+    form.append('file', fileInput.files[0]);
+    form.append('platform', el('platform').value);
+
+    try {
+      const resp = await fetch('/run', { method: 'POST', body: form });
+      const data = await resp.json();
+
+      if (!resp.ok || data.error) {
+        el('error-box').textContent = data.error || 'Неизвестная ошибка';
+        show('error-box');
+        return;
+      }
+
+      renderResults(data);
+      show('results');
+    } catch (err) {
+      el('error-box').textContent = 'Сетевая ошибка: ' + err.message;
+      show('error-box');
+    } finally {
+      el('run-btn').disabled = false;
+      el('spinner').classList.remove('active');
+      el('run-status').textContent = '';
+    }
+  }
+
+  // ── Render results ───────────────────────────────────────────────────────────
+  function renderResults(data) {
+    const s = data.summary;
+    const final = finalAttempts(data.attempts || []);
+
+    // Summary cards
+    el('summary-grid').innerHTML = `
+      <div class="stat"><div class="num">${s.total_violations}</div><div class="lbl">Нарушений</div></div>
+      <div class="stat green"><div class="num">${s.fixed}</div><div class="lbl">Исправлено</div></div>
+      <div class="stat yellow"><div class="num">${s.escalated_to_human}</div><div class="lbl">Эскалация</div></div>
+      <div class="stat ${s.unfixed_after_retries > 0 ? 'red' : ''}">
+        <div class="num">${s.unfixed_after_retries}</div><div class="lbl">Не исправлено</div>
+      </div>
+      <div class="stat"><div class="num">${Math.round(s.first_attempt_fix_rate * 100)}%</div>
+        <div class="lbl">С первой попытки</div></div>
+    `;
+
+    // Violations table
+    if (!data.violations || data.violations.length === 0) {
+      el('violations-card').innerHTML = '<h2>Нарушения</h2><p style="color:var(--muted);font-size:13px">Нарушений не найдено — CSV чистый ✓</p>';
+    } else {
+      const rows = data.violations.map(v => {
+        const key = `${v.rule_id}:${v.row_index}`;
+        const attempt = final[key];
+        const outcome = attempt ? attempt.outcome : '—';
+        const proposed = attempt && attempt.proposed_text
+          ? attempt.proposed_text.substring(0, 120) + (attempt.proposed_text.length > 120 ? '…' : '')
+          : '—';
+        return `<tr>
+          <td><span class="rule-id">${v.rule_id}</span></td>
+          <td><span class="row-idx">#${v.row_index + 1}</span></td>
+          <td><span class="msg">${escHtml(v.message)}</span></td>
+          <td>${badge(outcome)}</td>
+          <td><span class="proposed">${escHtml(proposed)}</span></td>
+        </tr>`;
+      }).join('');
+      el('violations-body').innerHTML = rows;
+    }
+
+    // Post-fix lint
+    const pfl = data.post_fix_lint;
+    if (pfl.clean) {
+      el('lint-status').innerHTML =
+        '<div class="dot green"></div><span>Чисто — новых нарушений не введено</span>';
+    } else if (pfl.introduced_by_fix && pfl.introduced_by_fix.length) {
+      const list = pfl.introduced_by_fix.map(v => `<code>${v.rule_id}</code>`).join(', ');
+      el('lint-status').innerHTML =
+        `<div class="dot red"></div><span>Фиксы ввели новые нарушения: ${list}. Проверьте report.json.</span>`;
+    } else {
+      el('lint-status').innerHTML =
+        `<div class="dot red" style="background:var(--yellow-t)"></div>
+         <span>${pfl.residual_known} известных нарушений остались (эскалация/не исправлены)</span>`;
+    }
+
+    // Download link
+    el('dl-link').href = '/download/' + encodeURIComponent(data.fixed_csv);
+    el('dl-link').querySelector('span') || el('dl-link');
+  }
+
+  function escHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+</script>
+</body>
+</html>
