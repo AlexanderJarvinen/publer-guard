@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -224,27 +224,27 @@
 
   <header>
     <h1>publer<span>-guard</span></h1>
-    <p>Валидация и авто-ремонт Publer CSV перед публикацией</p>
+    <p>Validate and auto-repair Publer bulk-upload CSVs before publishing</p>
   </header>
 
   <!-- ── Upload form ── -->
   <div class="card">
-    <h2>Входные данные</h2>
+    <h2>Input</h2>
     <div class="fields">
       <div>
-        <label>CSV файл</label>
+        <label>CSV file</label>
         <div class="file-wrap" id="file-label" onclick="document.getElementById('file-input').click()">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
             <polyline points="17 8 12 3 7 8"/>
             <line x1="12" y1="3" x2="12" y2="15"/>
           </svg>
-          <span id="file-name">Выберите файл…</span>
+          <span id="file-name">Choose file…</span>
         </div>
         <input type="file" id="file-input" accept=".csv">
       </div>
       <div>
-        <label>Платформа</label>
+        <label>Platform</label>
         <select id="platform">
           {% for p in platforms %}
           <option value="{{ p }}"{% if p == 'facebook' %} selected{% endif %}>{{ p }}</option>
@@ -253,7 +253,7 @@
       </div>
     </div>
     <div class="btn-row">
-      <button id="run-btn" onclick="runPipeline()">Валидировать</button>
+      <button id="run-btn" onclick="runPipeline()">Validate</button>
       <div class="spinner" id="spinner"></div>
       <span id="run-status" style="color:var(--muted);font-size:13px;"></span>
     </div>
@@ -270,16 +270,16 @@
 
     <!-- Violations table -->
     <div class="card" id="violations-card">
-      <h2>Нарушения</h2>
+      <h2>Violations</h2>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Правило</th>
-              <th>Строка</th>
-              <th>Описание</th>
-              <th>Статус</th>
-              <th>Причина / фикс</th>
+              <th>Rule</th>
+              <th>Row</th>
+              <th>Message</th>
+              <th>Status</th>
+              <th>Reason / fix</th>
             </tr>
           </thead>
           <tbody id="violations-body"></tbody>
@@ -289,26 +289,26 @@
 
     <!-- Post-fix lint -->
     <div class="card" id="lint-card">
-      <h2>Пост-ремонт релинт</h2>
+      <h2>Post-fix re-lint</h2>
       <div class="lint-status" id="lint-status"></div>
     </div>
 
     <!-- Monitoring -->
     <div class="card" id="monitoring-card">
-      <h2>LLM-вызовы</h2>
+      <h2>LLM calls</h2>
       <div id="monitoring-body"></div>
     </div>
 
     <!-- Download -->
     <div class="card">
-      <h2>Результат</h2>
+      <h2>Output</h2>
       <a id="dl-link" class="dl-btn" href="#">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
           <polyline points="7 10 12 15 17 10"/>
           <line x1="12" y1="15" x2="12" y2="3"/>
         </svg>
-        Скачать исправленный CSV
+        Download fixed CSV
       </a>
     </div>
 
@@ -332,7 +332,7 @@
   function hide(id) { el(id).classList.add('hidden'); }
 
   function badge(outcome) {
-    const map = { fixed: 'Исправлено', escalated: 'Эскалация', unfixed: 'Не исправлено' };
+    const map = { fixed: 'Fixed', escalated: 'Escalated', unfixed: 'Unfixed' };
     return `<span class="badge ${outcome}">${map[outcome] || outcome}</span>`;
   }
 
@@ -347,14 +347,14 @@
   async function runPipeline() {
     const fileInput = el('file-input');
     if (!fileInput.files.length) {
-      alert('Выберите CSV файл');
+      alert('Please select a CSV file');
       return;
     }
 
     // UI: loading state
     el('run-btn').disabled = true;
     el('spinner').classList.add('active');
-    el('run-status').textContent = 'Запускаем pipeline…';
+    el('run-status').textContent = 'Running pipeline…';
     hide('results');
     hide('error-box');
 
@@ -367,7 +367,7 @@
       const data = await resp.json();
 
       if (!resp.ok || data.error) {
-        el('error-box').textContent = data.error || 'Неизвестная ошибка';
+        el('error-box').textContent = data.error || 'Unknown error';
         show('error-box');
         return;
       }
@@ -375,7 +375,7 @@
       renderResults(data);
       show('results');
     } catch (err) {
-      el('error-box').textContent = 'Сетевая ошибка: ' + err.message;
+      el('error-box').textContent = 'Network error: ' + err.message;
       show('error-box');
     } finally {
       el('run-btn').disabled = false;
@@ -391,19 +391,19 @@
 
     // Summary cards
     el('summary-grid').innerHTML = `
-      <div class="stat"><div class="num">${s.total_violations}</div><div class="lbl">Нарушений</div></div>
-      <div class="stat green"><div class="num">${s.fixed}</div><div class="lbl">Исправлено</div></div>
-      <div class="stat yellow"><div class="num">${s.escalated_to_human}</div><div class="lbl">Эскалация</div></div>
+      <div class="stat"><div class="num">${s.total_violations}</div><div class="lbl">Violations</div></div>
+      <div class="stat green"><div class="num">${s.fixed}</div><div class="lbl">Fixed</div></div>
+      <div class="stat yellow"><div class="num">${s.escalated_to_human}</div><div class="lbl">Escalated</div></div>
       <div class="stat ${s.unfixed_after_retries > 0 ? 'red' : ''}">
-        <div class="num">${s.unfixed_after_retries}</div><div class="lbl">Не исправлено</div>
+        <div class="num">${s.unfixed_after_retries}</div><div class="lbl">Unfixed</div>
       </div>
       <div class="stat"><div class="num">${Math.round(s.first_attempt_fix_rate * 100)}%</div>
-        <div class="lbl">С первой попытки</div></div>
+        <div class="lbl">1st-attempt rate</div></div>
     `;
 
     // Violations table
     if (!data.violations || data.violations.length === 0) {
-      el('violations-card').innerHTML = '<h2>Нарушения</h2><p style="color:var(--muted);font-size:13px">Нарушений не найдено — CSV чистый ✓</p>';
+      el('violations-card').innerHTML = '<h2>Violations</h2><p style="color:var(--muted);font-size:13px">No violations found — CSV is clean ✓</p>';
     } else {
       const rows = data.violations.map(v => {
         const key = `${v.rule_id}:${v.row_index}`;
@@ -434,15 +434,15 @@
     const pfl = data.post_fix_lint;
     if (pfl.clean) {
       el('lint-status').innerHTML =
-        '<div class="dot green"></div><span>Чисто — новых нарушений не введено</span>';
+        '<div class="dot green"></div><span>Clean — no new violations introduced by fixes</span>';
     } else if (pfl.introduced_by_fix && pfl.introduced_by_fix.length) {
       const list = pfl.introduced_by_fix.map(v => `<code>${v.rule_id}</code>`).join(', ');
       el('lint-status').innerHTML =
-        `<div class="dot red"></div><span>Фиксы ввели новые нарушения: ${list}. Проверьте report.json.</span>`;
+        `<div class="dot red"></div><span>Fixes introduced new violations: ${list}. Check report.json.</span>`;
     } else {
       el('lint-status').innerHTML =
         `<div class="dot red" style="background:var(--yellow-t)"></div>
-         <span>${pfl.residual_known} известных нарушений остались (эскалация/не исправлены)</span>`;
+         <span>${pfl.residual_known} known violation(s) remain (escalated / unfixed)</span>`;
     }
 
     // Monitoring
@@ -458,12 +458,12 @@
     ).join('');
     el('monitoring-body').innerHTML = `
       <div style="display:flex;gap:24px;margin-bottom:14px;font-size:13px">
-        <span>Вызовов: <b>${mon.total_calls}</b></span>
-        <span>Токены in/out: <b>${mon.total_input_tokens} / ${mon.total_output_tokens}</b>${estimated}</span>
-        <span>Стоимость: <b>$${mon.est_cost_usd.toFixed(5)}</b></span>
+        <span>Calls: <b>${mon.total_calls}</b></span>
+        <span>Tokens in/out: <b>${mon.total_input_tokens} / ${mon.total_output_tokens}</b>${estimated}</span>
+        <span>Est. cost: <b>$${mon.est_cost_usd.toFixed(5)}</b></span>
       </div>
       ${byModel ? `<div class="table-wrap"><table>
-        <thead><tr><th>Модель</th><th>Вызовов</th><th>Токены in/out</th><th>Стоимость</th></tr></thead>
+        <thead><tr><th>Model</th><th>Calls</th><th>Tokens in/out</th><th>Est. cost</th></tr></thead>
         <tbody>${byModel}</tbody>
       </table></div>` : ''}
     `;
