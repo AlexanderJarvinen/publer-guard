@@ -1,10 +1,11 @@
 # publer-guard
 
-A multi-agent system that validates and repairs Publer bulk-upload CSVs
-against a set of **mechanical, platform-specific rules**, then proves the
-repair by re-running a deterministic checker. It ends in a real
-artifact: a corrected, import-ready CSV plus a JSON validation report and
-a replayable trace.
+A multi-agent system that turns a hand-filled content plan into
+**validated, import-ready Publer CSVs**. It ingests the plan, slices it
+into per-platform files, checks every row against a set of **mechanical,
+platform-specific rules**, repairs what it can, and proves each repair by
+re-running a deterministic checker. It ends in a real artifact: corrected
+CSVs plus a JSON validation report and a replayable trace.
 
 It is built around one hard principle:
 
@@ -21,11 +22,30 @@ spec** — and that is something code can check.
 
 ---
 
+## Workflow
+
+```
+  ODS/XLS content plan          publer-guard
+  (one spreadsheet,      ┌──────────────────────────────────────┐
+   filled by hand)  ───▶ │  Ingestion → Lint → Fix → Verify      │ ───▶  corrected CSVs
+                         │  (converter)  (deterministic + agents) │       + report + trace
+                         └──────────────────────────────────────┘             │
+                                                                               ▼
+                                                                  human uploads to Publer
+```
+
+You upload the `.ods`/`.xls` content plan (or, if you already have them,
+the split per-platform CSVs). publer-guard converts the plan into
+per-platform Publer CSVs, validates and repairs each one, and hands back
+corrected, import-ready files. A human makes the final call on uploading
+to Publer.
+
+---
+
 ## Why this problem
 
-The real pain it comes from: when you bulk-schedule posts through Publer
-via CSV, a handful of mechanical mistakes silently break the import or
-the publish:
+When you bulk-schedule posts through Publer via CSV, a handful of
+mechanical mistakes silently break the import or the publish:
 
 - A media URL grabbed too early is a **temporary** link
   (`.../uploads/tmp/...`) that expires before the post goes out — the
@@ -37,6 +57,8 @@ the publish:
 - The **call-to-action** format differs per platform (flat URL on
   Twitter/Facebook, markdown allowed on Telegram, native @-mention
   inside Instagram, and the funnel endpoint itself must carry *no* CTA).
+- Serbian copy accidentally left in **Cyrillic** on a platform that
+  should be Latin.
 
 These are not matters of taste. Each is a binary, checkable fact. That's
 exactly what makes the problem a good fit for grounded, mechanical
@@ -44,9 +66,64 @@ validation rather than vibes.
 
 ---
 
+## Input: the content plan
+
+The source is a single spreadsheet (`.ods`/`.xls`), sheet
+**`Контент-план`**, where each platform is a **block of columns** starting
+at row 0. The ingestion step reads each block and its content types:
+
+| Block label (row 0) | Platform          | Content types                |
+|---------------------|-------------------|------------------------------|
+| `FACEBOOK`          | `facebook`        | posts, клипы (reels)         |
+| `@arcticdreamsofficial` | `instagram_band`   | posts, reels, stories    |
+| `@alex_y_yarvinen`  | `instagram_funnel`| posts, reels, stories        |
+| `YOUTUBE`           | `youtube`         | posts, video, shorts         |
+| `TIKTOK`            | `tiktok`          | video                        |
+| `TELEGRAM`          | `telegram`        | posts                        |
+| `TWITTER/X`         | `twitter`         | posts                        |
+
+Each platform+type that has content becomes one output CSV, with the
+`Platform` assigned automatically from the block label. Hashtags are
+merged into the post text; the date/time cells become the `YYYY/MM/DD HH:MM`
+`Date` field.
+
+---
+
+## Output format — the Publer 12-column template
+
+Every CSV publer-guard emits (and reads back on re-run) is Publer's
+official bulk-import template: `utf-8-sig` (BOM), comma-delimited, exactly
+**12 columns**. `column_count` enforces this.
+
+| # | Column (template header)                         | Used by rule / role |
+|---|--------------------------------------------------|---------------------|
+| 0 | `Date - Intl. format or prompt`                  | `date_format` — must be `YYYY/MM/DD HH:MM` |
+| 1 | `Text`                                           | `twitter_length`, `cta_format`, `hashtags_2084`, `no_cyrillic` — the published caption (hashtags merged in) |
+| 2 | `Link(s) - Separated by comma for FB carousels`  | `link_empty` — must be empty |
+| 3 | `Media URL(s) - Separated by comma`              | `media_url_permanent` — no `/uploads/tmp/` |
+| 4 | `Title - For the video, pin, PDF ..`             | video/pin title |
+| 5 | `Label(s) - Separated by comma`                  | 2084-series detection (Label contains `2084`) |
+| 6 | `Alt text(s) - Separated by \|\|`                | — |
+| 7 | `Comment(s) - Separated by \|\|`                 | — |
+| 8 | `Pin board, FB album, or Google category`        | — |
+| 9 | `Post subtype - I.e. story, reel, PDF ..`        | — |
+| 10| `CTA - For Facebook links or Google`             | `cta_format` (dedicated CTA column) |
+| 11| `Reminder - For stories, reels, shorts, and TikToks` | — |
+
+`Label` doubles as Publer's internal organisational tag and may legitimately
+be Cyrillic (it is never published), so `no_cyrillic` checks published text
+fields, not the Label column.
+
+---
+
 ## Architecture
 
 ```
+  ┌─────────────────────────────────────────────────────────────┐
+  │  Ingestion (deterministic converter)                         │
+  │  .ods/.xls content plan  ──▶  per-platform 12-col Publer CSV  │
+  └───────────────────────────────┬─────────────────────────────┘
+                                   ▼
                          ┌────────────────────┐
                          │    Orchestrator    │
                          │  owns PipelineState │
@@ -86,6 +163,7 @@ validation rather than vibes.
 
 | Component | Kind | Model | Responsibility |
 |-----------|------|-------|----------------|
+| **Ingestion** | **deterministic** | — | Reads the `.ods`/`.xls` content plan and emits per-platform, per-type CSVs in the 12-column Publer template, assigning `Platform` from the block label. A pure spreadsheet→CSV transform with a fixed column map — no LLM. |
 | **Orchestrator** | plain code | — | Owns `PipelineState`, runs lint→triage→fix→verify→critic loop, enforces retry limits and gates. Holds all control flow so agents stay dumb and replaceable. |
 | **Linter** | **deterministic** | — | The ground truth. Pure Python rules, each returns a structured `Violation`. An agent cannot create or dismiss a violation. |
 | **Triage** | LLM | Haiku 4.5 | Groups violations, decides fix order, separates auto-fixable from human-only. Cheap model — this is light reasoning, not generation. |
@@ -95,7 +173,9 @@ validation rather than vibes.
 
 The model tiering (Haiku / Sonnet / Opus) is a cost lever, not decoration:
 the cheap model does the cheap thinking, the expensive model is reserved
-for the rare hard case.
+for the rare hard case. Ingestion is deliberately **not** an agent —
+mapping spreadsheet columns to CSV columns is a fixed, mechanical
+transform with a single correct answer.
 
 ---
 
@@ -188,6 +268,31 @@ the whole design depends on.
 
 ---
 
+## Deliverables
+
+Two front-ends over the same pipeline:
+
+- **CLI** (`src/cli.py`) — `python -m src.cli INPUT.csv --platform twitter`.
+  Writes `<stem>_fixed.csv`, `<stem>_report.json`, `<stem>_trace.json`.
+- **Web UI** (`src/app.py`, Flask) — `python -m src.app`, then
+  <http://localhost:5000>. Supports:
+  - **content-plan upload** — drop an `.ods`/`.xls` plan and it's sliced
+    into per-platform CSVs automatically;
+  - **multi-file input** — one `Platform` per file, add rows with **+**;
+  - **bulk upload** — pick many CSVs in one dialog (or drag-and-drop);
+    each becomes a file+platform row. Client- and server-side `.csv`
+    validation;
+  - a merged **results view** — violations table (tagged by source file),
+    post-fix re-lint status, and per-model cost/token monitoring;
+  - **downloads** — each corrected CSV, all corrected CSVs as one **ZIP**,
+    and the merged **report** as JSON or CSV;
+  - themed **toast** notifications (no native `alert`).
+
+Every run appends to `PipelineState.trace`; the trace is the demo
+material and the audit log.
+
+---
+
 ## What was rejected
 
 - **A single monolithic LLM call** ("here's the CSV, fix it"). Rejected:
@@ -200,15 +305,11 @@ the whole design depends on.
   proposing/judging split, and nothing to validate. It survives instead
   as a single **tool** (`lookup_media`) the Fixer may call — which is the
   correct place for it.
+- **An LLM in the ingestion/converter step.** Rejected: mapping
+  spreadsheet columns to CSV columns is a fixed, mechanical transform. An
+  LLM there would only add nondeterminism to a step that has a single
+  correct answer.
 - **An agent framework (LangGraph etc.)**. Rejected for this size: the
   control flow is a short, explicit loop. Hand-writing the orchestrator
   means every line is defensible and there's no framework magic to
   explain under questioning.
-
----
-
-## Status
-
-Architecture document — implementation in progress. Run instructions,
-output examples, and the eval harness numbers will be filled in once the
-code stabilizes.
