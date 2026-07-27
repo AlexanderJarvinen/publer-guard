@@ -52,9 +52,40 @@
     .card h2 { font-size: 13px; font-weight: 600; text-transform: uppercase;
                letter-spacing: 0.08em; color: var(--muted); margin-bottom: 16px; }
 
+    /* ── Bulk drop zone ── */
+    .bulk-drop {
+      border: 1px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 13px;
+      cursor: pointer;
+      transition: border-color .15s, color .15s, background .15s;
+    }
+    .bulk-drop:hover { border-color: var(--accent); color: var(--text); }
+    .bulk-drop.dragover { border-color: var(--accent); color: var(--text); background: #1f1500; }
+    .bulk-drop b { color: var(--text); font-weight: 600; }
+
     /* ── Form ── */
-    .fields { display: grid; grid-template-columns: 1fr 200px; gap: 12px; align-items: end; }
-    @media (max-width: 600px) { .fields { grid-template-columns: 1fr; } }
+    .file-row {
+      display: grid;
+      grid-template-columns: 1fr 200px 36px;
+      gap: 12px;
+      align-items: end;
+      margin-bottom: 12px;
+    }
+    @media (max-width: 600px) { .file-row { grid-template-columns: 1fr; } }
+    .file-row .col-label { display: block; }
+    /* Hide the duplicated "CSV file"/"Platform" captions on rows past the first */
+    .file-row:not(:first-child) label { visibility: hidden; height: 0; margin: 0; }
+    @media (max-width: 600px) {
+      .file-row:not(:first-child) label { visibility: visible; height: auto; margin-bottom: 6px; }
+    }
 
     label { display: block; font-size: 12px; color: var(--muted);
             margin-bottom: 6px; font-weight: 500; }
@@ -89,7 +120,38 @@
     }
     select:focus { outline: none; border-color: var(--accent); }
 
-    .btn-row { margin-top: 16px; display: flex; gap: 10px; align-items: center; }
+    /* remove-row button (×) */
+    .fr-remove {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: var(--radius);
+      width: 36px; height: 42px;
+      padding: 0;
+      font-size: 20px;
+      line-height: 1;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      transition: border-color .15s, color .15s;
+    }
+    .fr-remove:hover { border-color: var(--red-t); color: var(--red-t); background: transparent; }
+    @media (max-width: 600px) { .fr-remove { width: 100%; } }
+
+    /* + Add file button (secondary style) */
+    .btn-add {
+      background: transparent;
+      border: 1px dashed var(--border);
+      color: var(--muted);
+      border-radius: var(--radius);
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 500;
+      display: inline-flex; align-items: center; gap: 8px;
+    }
+    .btn-add:hover { border-color: var(--accent); color: var(--accent); background: transparent; }
+    .btn-add svg { width: 14px; height: 14px; }
+
+    .btn-row { margin-top: 20px; display: flex; gap: 10px; align-items: center; }
 
     button {
       background: var(--accent);
@@ -230,28 +292,28 @@
   <!-- ── Upload form ── -->
   <div class="card">
     <h2>Input</h2>
-    <div class="fields">
-      <div>
-        <label>CSV file</label>
-        <div class="file-wrap" id="file-label" onclick="document.getElementById('file-input').click()">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-            <polyline points="17 8 12 3 7 8"/>
-            <line x1="12" y1="3" x2="12" y2="15"/>
-          </svg>
-          <span id="file-name">Choose file…</span>
-        </div>
-        <input type="file" id="file-input" accept=".csv">
-      </div>
-      <div>
-        <label>Platform</label>
-        <select id="platform">
-          {% for p in platforms %}
-          <option value="{{ p }}"{% if p == 'facebook' %} selected{% endif %}>{{ p }}</option>
-          {% endfor %}
-        </select>
-      </div>
+
+    <!-- Bulk upload: one dialog, many CSVs at once → each becomes a row below -->
+    <div class="bulk-drop" id="bulk-drop" onclick="document.getElementById('bulk-input').click()">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="17 8 12 3 7 8"/>
+        <line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+      <span><b>Upload CSV files</b> — select several at once, or drop them here</span>
     </div>
+    <input type="file" id="bulk-input" accept=".csv,text/csv" multiple style="display:none">
+
+    <!-- Dynamic file+platform rows are injected here -->
+    <div id="file-rows"></div>
+
+    <button type="button" class="btn-add" id="add-row-btn" onclick="addRow()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+      Add file manually
+    </button>
+
     <div class="btn-row">
       <button id="run-btn" onclick="runPipeline()">Validate</button>
       <div class="spinner" id="spinner"></div>
@@ -275,6 +337,7 @@
         <table>
           <thead>
             <tr>
+              <th>File</th>
               <th>Rule</th>
               <th>Row</th>
               <th>Message</th>
@@ -302,28 +365,166 @@
     <!-- Download -->
     <div class="card">
       <h2>Output</h2>
-      <a id="dl-link" class="dl-btn" href="#">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-          <polyline points="7 10 12 15 17 10"/>
-          <line x1="12" y1="15" x2="12" y2="3"/>
-        </svg>
-        Download fixed CSV
-      </a>
+      <div id="dl-links" style="display:flex;flex-direction:column;gap:10px;align-items:flex-start;"></div>
+
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);
+                  display:flex;gap:10px;flex-wrap:wrap;">
+        <button type="button" class="dl-btn" onclick="downloadReportJson()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+          </svg>
+          Download report (JSON)
+        </button>
+        <button type="button" class="dl-btn" onclick="downloadReportCsv()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/>
+          </svg>
+          Download report (CSV)
+        </button>
+      </div>
     </div>
 
   </div>
 </div>
 
 <script>
-  // ── File picker ──────────────────────────────────────────────────────────────
-  document.getElementById('file-input').addEventListener('change', function () {
-    const wrap = document.getElementById('file-label');
-    const span = document.getElementById('file-name');
-    if (this.files.length) {
-      span.textContent = this.files[0].name;
-      wrap.classList.add('has-file');
+  // ── Platforms (from server) ──────────────────────────────────────────────────
+  const PLATFORMS = {{ platforms | tojson }};
+
+  // ── CSV validation ────────────────────────────────────────────────────────────
+  // Extension is the reliable signal; browsers report inconsistent MIME types.
+  function isCsv(file) {
+    return /\.csv$/i.test(file.name);
+  }
+
+  // Assign a File object to a row's hidden <input type=file> (for bulk/drop).
+  function setRowFile(row, file) {
+    const input = row.querySelector('.fr-input');
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    row.querySelector('.fr-name').textContent = file.name;
+    row.querySelector('.fr-wrap').classList.add('has-file');
+  }
+
+  // ── Dynamic file+platform rows ────────────────────────────────────────────────
+  function addRow(file) {
+    const rows = document.getElementById('file-rows');
+    const row = document.createElement('div');
+    row.className = 'file-row';
+
+    const options = ['<option value="" selected disabled>— select —</option>']
+      .concat(PLATFORMS.map(p => `<option value="${p}">${p}</option>`))
+      .join('');
+
+    row.innerHTML = `
+      <div class="fr-file">
+        <label>CSV file</label>
+        <div class="file-wrap fr-wrap">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <span class="fr-name">Choose file…</span>
+        </div>
+        <input type="file" class="fr-input" accept=".csv" style="display:none">
+      </div>
+      <div class="fr-platform">
+        <label>Platform</label>
+        <select class="fr-select">${options}</select>
+      </div>
+      <button type="button" class="fr-remove" title="Remove this file">&times;</button>
+    `;
+    rows.appendChild(row);
+
+    // Wire the picker
+    const wrap = row.querySelector('.fr-wrap');
+    const input = row.querySelector('.fr-input');
+    const name = row.querySelector('.fr-name');
+    wrap.addEventListener('click', () => input.click());
+    input.addEventListener('change', function () {
+      if (this.files.length) {
+        if (!isCsv(this.files[0])) {
+          alert('"' + this.files[0].name + '" is not a .csv file');
+          this.value = '';
+          name.textContent = 'Choose file…';
+          wrap.classList.remove('has-file');
+          return;
+        }
+        name.textContent = this.files[0].name;
+        wrap.classList.add('has-file');
+      } else {
+        name.textContent = 'Choose file…';
+        wrap.classList.remove('has-file');
+      }
+    });
+
+    // Wire remove
+    row.querySelector('.fr-remove').addEventListener('click', () => removeRow(row));
+    updateRemoveButtons();
+
+    // Pre-fill with a File (bulk upload / drag-drop).
+    if (file) setRowFile(row, file);
+    return row;
+  }
+
+  // ── Bulk upload → one row per selected CSV ────────────────────────────────────
+  function handleBulkFiles(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+
+    const valid = files.filter(isCsv);
+    const invalid = files.filter(f => !isCsv(f));
+    if (invalid.length) {
+      alert('Skipped — not .csv files:\n' + invalid.map(f => f.name).join('\n'));
     }
+    if (!valid.length) return;
+
+    // If the only row is an empty starter row, reuse it instead of leaving a blank.
+    const existing = document.querySelectorAll('.file-row');
+    if (existing.length === 1 && !existing[0].querySelector('.fr-input').files.length) {
+      setRowFile(existing[0], valid.shift());
+    }
+    valid.forEach(f => addRow(f));
+  }
+
+  function removeRow(row) {
+    row.remove();
+    updateRemoveButtons();
+  }
+
+  // Keep at least one row; disable the × when only one remains.
+  function updateRemoveButtons() {
+    const rows = document.querySelectorAll('.file-row');
+    rows.forEach(r => {
+      const btn = r.querySelector('.fr-remove');
+      btn.disabled = rows.length <= 1;
+      btn.style.opacity = rows.length <= 1 ? '0.3' : '1';
+      btn.style.cursor = rows.length <= 1 ? 'not-allowed' : 'pointer';
+    });
+  }
+
+  // Start with one row.
+  addRow();
+
+  // Wire the bulk file input (multiple selection in one dialog).
+  document.getElementById('bulk-input').addEventListener('change', function () {
+    handleBulkFiles(this.files);
+    this.value = '';   // allow re-selecting the same files later
+  });
+
+  // Drag & drop onto the bulk zone.
+  const bulkDrop = document.getElementById('bulk-drop');
+  ['dragenter', 'dragover'].forEach(ev =>
+    bulkDrop.addEventListener(ev, e => { e.preventDefault(); bulkDrop.classList.add('dragover'); }));
+  ['dragleave', 'drop'].forEach(ev =>
+    bulkDrop.addEventListener(ev, e => { e.preventDefault(); bulkDrop.classList.remove('dragover'); }));
+  bulkDrop.addEventListener('drop', e => {
+    if (e.dataTransfer && e.dataTransfer.files) handleBulkFiles(e.dataTransfer.files);
   });
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -336,31 +537,48 @@
     return `<span class="badge ${outcome}">${map[outcome] || outcome}</span>`;
   }
 
-  // Build a map: "rule_id:row_index" → last attempt
+  // Build a map: "file:rule_id:row_index" → last attempt
   function finalAttempts(attempts) {
     const map = {};
-    for (const a of attempts) map[`${a.rule_id}:${a.row_index}`] = a;
+    for (const a of attempts) map[`${a.file || ''}:${a.rule_id}:${a.row_index}`] = a;
     return map;
   }
 
   // ── Main pipeline call ───────────────────────────────────────────────────────
   async function runPipeline() {
-    const fileInput = el('file-input');
-    if (!fileInput.files.length) {
-      alert('Please select a CSV file');
+    const rows = Array.from(document.querySelectorAll('.file-row'));
+
+    // Collect and validate every row.
+    const picked = [];
+    for (const r of rows) {
+      const input = r.querySelector('.fr-input');
+      const platform = r.querySelector('.fr-select').value;
+      if (!input.files.length) continue;      // skip empty rows silently
+      if (!platform) {
+        alert('Please select a platform for ' + input.files[0].name);
+        return;
+      }
+      picked.push({ file: input.files[0], platform });
+    }
+
+    if (!picked.length) {
+      alert('Please select at least one CSV file');
       return;
     }
 
     // UI: loading state
     el('run-btn').disabled = true;
     el('spinner').classList.add('active');
-    el('run-status').textContent = 'Running pipeline…';
+    el('run-status').textContent =
+      picked.length > 1 ? `Running pipeline on ${picked.length} files…` : 'Running pipeline…';
     hide('results');
     hide('error-box');
 
     const form = new FormData();
-    form.append('file', fileInput.files[0]);
-    form.append('platform', el('platform').value);
+    for (const p of picked) {
+      form.append('files', p.file);
+      form.append('platforms', p.platform);
+    }
 
     try {
       const resp = await fetch('/run', { method: 'POST', body: form });
@@ -384,8 +602,12 @@
     }
   }
 
+  // Last merged report — kept so the download buttons can serialize it.
+  let lastResult = null;
+
   // ── Render results ───────────────────────────────────────────────────────────
   function renderResults(data) {
+    lastResult = data;
     const s = data.summary;
     const final = finalAttempts(data.attempts || []);
 
@@ -406,7 +628,7 @@
       el('violations-card').innerHTML = '<h2>Violations</h2><p style="color:var(--muted);font-size:13px">No violations found — CSV is clean ✓</p>';
     } else {
       const rows = data.violations.map(v => {
-        const key = `${v.rule_id}:${v.row_index}`;
+        const key = `${v.file || ''}:${v.rule_id}:${v.row_index}`;
         const attempt = final[key];
         const outcome = attempt ? attempt.outcome : '—';
 
@@ -420,6 +642,7 @@
         }
 
         return `<tr>
+          <td><span class="row-idx">${escHtml(v.file || '—')}</span></td>
           <td><span class="rule-id">${v.rule_id}</span></td>
           <td><span class="row-idx">row ${v.row_index}</span></td>
           <td><span class="msg">${escHtml(v.message)}</span></td>
@@ -468,9 +691,17 @@
       </table></div>` : ''}
     `;
 
-    // Download link
-    el('dl-link').href = '/download/' + encodeURIComponent(data.fixed_csv);
-    el('dl-link').querySelector('span') || el('dl-link');
+    // Download links — one per processed file
+    const dlIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <line x1="12" y1="15" x2="12" y2="3"/></svg>`;
+    const outFiles = data.files || (data.fixed_csv ? [{ fixed_csv: data.fixed_csv, filename: data.fixed_csv, platform: '' }] : []);
+    el('dl-links').innerHTML = outFiles.map(f => `
+      <a class="dl-btn" href="/download/${encodeURIComponent(f.fixed_csv)}">
+        ${dlIcon}
+        ${escHtml(f.filename)}${f.platform ? ` <span style="color:var(--muted);font-weight:400">· ${escHtml(f.platform)}</span>` : ''}
+      </a>`).join('');
   }
 
   function escHtml(str) {
@@ -479,6 +710,72 @@
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+  // ── Report downloads ──────────────────────────────────────────────────────────
+  function stamp() {
+    const d = new Date();
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  }
+
+  function triggerDownload(content, filename, mime) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadReportJson() {
+    if (!lastResult) { alert('Run a validation first'); return; }
+    triggerDownload(
+      JSON.stringify(lastResult, null, 2),
+      `publer-guard_report_${stamp()}.json`,
+      'application/json'
+    );
+  }
+
+  // One row per violation, matching the on-screen table (File, Rule, Row, Message, Status, Detail).
+  function downloadReportCsv() {
+    if (!lastResult) { alert('Run a validation first'); return; }
+    const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+
+    const final = finalAttempts(lastResult.attempts || []);
+    const header = ['File', 'Rule', 'Row', 'Message', 'Status', 'Detail'];
+    const lines = [header.map(q).join(',')];
+
+    for (const v of (lastResult.violations || [])) {
+      const attempt = final[`${v.file || ''}:${v.rule_id}:${v.row_index}`];
+      const status = attempt ? attempt.outcome : '';
+      let detail = '';
+      if (attempt && attempt.outcome === 'escalated' && attempt.gate_rejection) {
+        detail = attempt.gate_rejection;
+      } else if (attempt && attempt.proposed_text) {
+        detail = attempt.proposed_text;
+      }
+      lines.push([v.file, v.rule_id, v.row_index, v.message, status, detail].map(q).join(','));
+    }
+
+    // Prepend a small summary block for context.
+    const s = lastResult.summary || {};
+    const summary = [
+      ['# publer-guard report'],
+      ['# violations', s.total_violations],
+      ['# fixed', s.fixed],
+      ['# escalated', s.escalated_to_human],
+      ['# unfixed', s.unfixed_after_retries],
+      ['# first-attempt fix rate', Math.round((s.first_attempt_fix_rate || 0) * 100) + '%'],
+      [''],
+    ].map(r => r.map(q).join(',')).join('\r\n');
+
+    // BOM so Excel opens UTF-8 (Cyrillic) correctly.
+    triggerDownload('﻿' + summary + '\r\n' + lines.join('\r\n'),
+      `publer-guard_report_${stamp()}.csv`, 'text/csv');
   }
 </script>
 </body>

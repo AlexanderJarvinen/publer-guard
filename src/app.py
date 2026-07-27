@@ -37,21 +37,9 @@ def index():
     return render_template("index.html", platforms=platforms)
 
 
-@app.route("/run", methods=["POST"])
-def run():
-    uploaded = request.files.get("file")
-    if not uploaded:
-        return jsonify({"error": "Файл не выбран"}), 400
-
-    platform_str = request.form.get("platform", "facebook")
-    max_retries = int(request.form.get("max_retries", 2))
-
-    try:
-        platform = Platform(platform_str)
-    except ValueError:
-        return jsonify({"error": f"Неизвестная платформа: {platform_str}"}), 400
-
-    # Save upload to a temp file, run pipeline, clean up
+def _run_one(uploaded, platform: Platform, max_retries: int) -> dict:
+    """Run the pipeline on a single uploaded CSV and return its report,
+    with every violation/attempt tagged by source filename."""
     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
         uploaded.save(tmp.name)
         tmp_path = Path(tmp.name)
@@ -76,13 +64,123 @@ def run():
 
         report = build_report(state)
         report["fixed_csv"] = fixed_name
-        return jsonify(report)
+        report["filename"] = uploaded.filename
+        report["platform"] = platform.value
 
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+        # Tag rows so the merged view knows which file each came from.
+        for v in report["violations"]:
+            v["file"] = uploaded.filename
+        for a in report["attempts"]:
+            a["file"] = uploaded.filename
+        return report
 
     finally:
         tmp_path.unlink(missing_ok=True)
+
+
+def _merge_reports(reports: list[dict]) -> dict:
+    """Aggregate several single-file reports into one combined report that
+    keeps the same top-level shape the frontend already renders."""
+    summary_keys = [
+        "total_violations", "fixed", "escalated_to_human",
+        "unfixed_after_retries", "rows_modified",
+    ]
+    summary = {k: sum(r["summary"][k] for r in reports) for k in summary_keys}
+
+    # Recompute first-attempt rate across the combined fixable population.
+    total_fixable = sum(len([v for v in r["violations"] if v.get("auto_fixable")]) for r in reports)
+    total_first_fixes = sum(
+        len([a for a in r["attempts"] if a.get("outcome") == "fixed" and a.get("attempt_number") == 1])
+        for r in reports
+    )
+    summary["first_attempt_fix_rate"] = round(
+        total_first_fixes / total_fixable if total_fixable else 1.0, 3
+    )
+
+    violations = [v for r in reports for v in r["violations"]]
+    attempts = [a for r in reports for a in r["attempts"]]
+    escalations = [e for r in reports for e in r["escalations"]]
+
+    # Post-fix lint — combined.
+    post_fix_lint = {
+        "clean": all(r["post_fix_lint"]["clean"] for r in reports),
+        "introduced_by_fix": [v for r in reports for v in r["post_fix_lint"]["introduced_by_fix"]],
+        "residual_known": sum(r["post_fix_lint"]["residual_known"] for r in reports),
+        "total_remaining": sum(r["post_fix_lint"]["total_remaining"] for r in reports),
+    }
+
+    # Monitoring — sum the numeric fields, merge by_model.
+    by_model: dict = {}
+    for r in reports:
+        for model, m in r["monitoring"].get("by_model", {}).items():
+            agg = by_model.setdefault(
+                model,
+                {"calls": 0, "input_tokens": 0, "output_tokens": 0, "est_cost_usd": 0.0},
+            )
+            agg["calls"] += m["calls"]
+            agg["input_tokens"] += m["input_tokens"]
+            agg["output_tokens"] += m["output_tokens"]
+            agg["est_cost_usd"] = round(agg["est_cost_usd"] + m["est_cost_usd"], 6)
+    monitoring = {
+        "total_calls": sum(r["monitoring"]["total_calls"] for r in reports),
+        "total_input_tokens": sum(r["monitoring"]["total_input_tokens"] for r in reports),
+        "total_output_tokens": sum(r["monitoring"]["total_output_tokens"] for r in reports),
+        "est_cost_usd": round(sum(r["monitoring"]["est_cost_usd"] for r in reports), 6),
+        "tokens_estimated": any(r["monitoring"]["tokens_estimated"] for r in reports),
+        "by_model": by_model,
+    }
+
+    return {
+        "summary": summary,
+        "violations": violations,
+        "attempts": attempts,
+        "escalations": escalations,
+        "post_fix_lint": post_fix_lint,
+        "monitoring": monitoring,
+        "files": [
+            {
+                "filename": r["filename"],
+                "platform": r["platform"],
+                "fixed_csv": r["fixed_csv"],
+                "summary": r["summary"],
+            }
+            for r in reports
+        ],
+    }
+
+
+@app.route("/run", methods=["POST"])
+def run():
+    files = request.files.getlist("files")
+    platforms = request.form.getlist("platforms")
+    files = [f for f in files if f and f.filename]
+
+    if not files:
+        return jsonify({"error": "Файлы не выбраны"}), 400
+    if len(platforms) != len(files):
+        return jsonify({"error": "Каждому файлу должна соответствовать платформа"}), 400
+
+    non_csv = [f.filename for f in files if not f.filename.lower().endswith(".csv")]
+    if non_csv:
+        return jsonify({"error": "Только .csv файлы: " + ", ".join(non_csv)}), 400
+
+    max_retries = int(request.form.get("max_retries", 2))
+
+    try:
+        reports = []
+        for uploaded, platform_str in zip(files, platforms):
+            if not platform_str:
+                return jsonify({"error": f"Не выбрана платформа для {uploaded.filename}"}), 400
+            try:
+                platform = Platform(platform_str)
+            except ValueError:
+                return jsonify({"error": f"Неизвестная платформа: {platform_str}"}), 400
+            reports.append(_run_one(uploaded, platform, max_retries))
+
+        return jsonify(_merge_reports(reports))
+
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
 
 
 @app.route("/download/<path:filename>")
