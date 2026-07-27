@@ -39,7 +39,7 @@ def test_relint_flags_violation_introduced_by_a_fix():
     row = CsvRow(
         row_index=0,
         platform=Platform.TWITTER,
-        date="2026-06-24 18:00",
+        date="2026/06/24 18:00",
         text=long_text,
         label="promo",
     )
@@ -84,7 +84,7 @@ def test_relint_is_clean_when_fix_introduces_nothing():
     row = CsvRow(
         row_index=0,
         platform=Platform.FACEBOOK,
-        date="2026-06-24 18:00",
+        date="2026/06/24 18:00",
         text="Album out now.",
         link="https://ffm.to/letargin",   # link_empty fires
         label="promo",
@@ -111,7 +111,7 @@ def test_metrics_recorded_and_costed():
     row = CsvRow(
         row_index=0,
         platform=Platform.FACEBOOK,
-        date="2026-06-24 18:00",
+        date="2026/06/24 18:00",
         text="Album out now.",
         link="https://ffm.to/letargin",
         label="promo",
@@ -149,7 +149,7 @@ def test_clean_csv_records_no_metrics():
     row = CsvRow(
         row_index=0,
         platform=Platform.FACEBOOK,
-        date="2026-06-24 18:00",
+        date="2026/06/24 18:00",
         text="Album out now.",
         label="promo",
     )

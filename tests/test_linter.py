@@ -30,7 +30,7 @@ def _row(**kwargs) -> CsvRow:
     defaults = dict(
         row_index=0,
         platform=Platform.FACEBOOK,
-        date="2026-06-24 18:00",
+        date="2026/06/24 18:00",
         text="Post text.",
         link="",
         media_url="https://cdn.publer.com/uploads/videos/abc/def.mp4",
@@ -89,34 +89,34 @@ class TestColumnCount:
 
 class TestDateFormat:
     def test_valid_date_is_clean(self):
-        assert check_date_format(_row(date="2026-06-24 18:00")) == []
+        assert check_date_format(_row(date="2026/06/24 18:00")) == []
 
     def test_us_format_fires(self):
-        v = check_date_format(_row(date="06-24-2026 20:00"))
+        v = check_date_format(_row(date="06/24/2026 20:00"))
         assert len(v) == 1
         assert v[0].rule_id == "date_format"
 
-    def test_slash_format_fires(self):
-        # Old YYYY/MM/DD format is no longer accepted
-        v = check_date_format(_row(date="2026/06/24 18:00"))
+    def test_dash_format_fires(self):
+        # ISO dash format is not the Publer format — only YYYY/MM/DD is accepted
+        v = check_date_format(_row(date="2026-06-24 18:00"))
         assert len(v) == 1
         assert v[0].rule_id == "date_format"
 
     def test_iso_8601_with_T_fires(self):
-        v = check_date_format(_row(date="2026-06-24T18:00"))
+        v = check_date_format(_row(date="2026/06/24T18:00"))
         assert len(v) == 1
         assert v[0].rule_id == "date_format"
 
     def test_date_only_no_time_fires(self):
-        v = check_date_format(_row(date="2026-06-24"))
+        v = check_date_format(_row(date="2026/06/24"))
         assert len(v) == 1
         assert v[0].rule_id == "date_format"
 
     def test_leading_trailing_whitespace_is_tolerated(self):
-        assert check_date_format(_row(date="  2026-06-24 18:00  ")) == []
+        assert check_date_format(_row(date="  2026/06/24 18:00  ")) == []
 
     def test_midnight_is_valid(self):
-        assert check_date_format(_row(date="2026-01-01 00:00")) == []
+        assert check_date_format(_row(date="2026/01/01 00:00")) == []
 
     def test_row_index_propagated(self):
         v = check_date_format(_row(row_index=7, date="bad"))
@@ -501,7 +501,7 @@ class TestLintRow:
     def test_fully_clean_row_returns_empty(self):
         r = _row(
             platform=Platform.TWITTER,
-            date="2026-06-24 18:00",
+            date="2026/06/24 18:00",
             text="New track. IG: instagram.com/alex_y_yarvinen #metal",
             link="",
             media_url="https://cdn.publer.com/uploads/videos/abc/def.mp4",

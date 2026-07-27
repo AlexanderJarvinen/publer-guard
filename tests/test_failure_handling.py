@@ -37,7 +37,7 @@ def _link_row() -> CsvRow:
     return CsvRow(
         row_index=0,
         platform=Platform.FACEBOOK,
-        date="2026-06-24 18:00",
+        date="2026/06/24 18:00",
         text="Album out now.",
         link="https://ffm.to/letargin",   # link_empty fires (auto_fixable)
         label="promo",

@@ -29,7 +29,7 @@ def _row(**kwargs) -> CsvRow:
     defaults = dict(
         row_index=0,
         platform=Platform.TWITTER,
-        date="2026-06-24 18:00",
+        date="2026/06/24 18:00",
         text="Some post text.",
         link="",
         media_url="https://cdn.publer.com/uploads/videos/abc/def.mp4",

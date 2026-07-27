@@ -26,7 +26,7 @@ def _row(**kwargs) -> CsvRow:
     defaults = dict(
         row_index=0,
         platform=Platform.FACEBOOK,
-        date="2026-06-24 18:00",
+        date="2026/06/24 18:00",
         text="Post text.",
         link="",
         media_url=_CDN_URL,
