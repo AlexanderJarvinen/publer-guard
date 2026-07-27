@@ -12,7 +12,10 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request, send_from_directory
+import io
+import zipfile
+
+from flask import Flask, jsonify, render_template, request, send_file, send_from_directory
 
 try:
     from dotenv import load_dotenv
@@ -186,6 +189,40 @@ def run():
 @app.route("/download/<path:filename>")
 def download(filename: str):
     return send_from_directory(_OUTPUT_DIR, filename, as_attachment=True)
+
+
+@app.route("/download-all")
+def download_all():
+    """Bundle the requested fixed CSVs into a single ZIP, built in-memory.
+
+    Filenames come from the query string (?files=a.csv&files=b.csv). Only
+    basenames of existing files inside the output dir are allowed — this
+    guards against path traversal.
+    """
+    requested = request.args.getlist("files")
+    if not requested:
+        return jsonify({"error": "Нет файлов для архива"}), 400
+
+    buf = io.BytesIO()
+    added = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name in requested:
+            safe = Path(name).name           # strip any directory component
+            path = _OUTPUT_DIR / safe
+            if path.is_file():
+                zf.write(path, arcname=safe)
+                added += 1
+
+    if not added:
+        return jsonify({"error": "Файлы не найдены"}), 404
+
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name="publer-guard_fixed_csvs.zip",
+    )
 
 
 if __name__ == "__main__":
