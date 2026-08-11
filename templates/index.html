@@ -335,6 +335,24 @@
     <p>Validate and auto-repair Publer bulk-upload CSVs before publishing</p>
   </header>
 
+  <!-- ── Content plan (.ods/.xls/.xlsx) ── -->
+  <div class="card">
+    <h2>Content plan (.ods / .xls / .xlsx)</h2>
+    <div class="bulk-drop" id="plan-drop" onclick="document.getElementById('plan-input').click()">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+      </svg>
+      <span><b>Upload content plan</b> — .ods, .xls or .xlsx, auto-sliced into per-platform CSVs</span>
+    </div>
+    <input type="file" id="plan-input" accept=".ods,.xls,.xlsx" style="display:none">
+    <div class="btn-row">
+      <button id="plan-btn" class="run-trigger" onclick="runPlan()" disabled>Convert &amp; validate</button>
+      <div class="spinner" id="plan-spinner"></div>
+      <span id="plan-status" style="color:var(--muted);font-size:13px;"></span>
+    </div>
+  </div>
+
   <!-- ── Upload form ── -->
   <div class="card">
     <h2>Input</h2>
@@ -361,7 +379,7 @@
     </button>
 
     <div class="btn-row">
-      <button id="run-btn" onclick="runPipeline()">Validate</button>
+      <button id="run-btn" class="run-trigger" onclick="runPipeline()" disabled>Validate</button>
       <div class="spinner" id="spinner"></div>
       <span id="run-status" style="color:var(--muted);font-size:13px;"></span>
     </div>
@@ -375,6 +393,12 @@
 
     <!-- Summary -->
     <div class="summary-grid" id="summary-grid"></div>
+
+    <!-- Skipped plan rows (content-plan runs only) -->
+    <div class="card hidden" id="ingestion-card">
+      <h2>Skipped plan rows</h2>
+      <div id="ingestion-body"></div>
+    </div>
 
     <!-- Violations table -->
     <div class="card" id="violations-card">
@@ -480,6 +504,7 @@
     input.files = dt.files;
     row.querySelector('.fr-name').textContent = file.name;
     row.querySelector('.fr-wrap').classList.add('has-file');
+    updateRunBtn();
   }
 
   // ── Dynamic file+platform rows ────────────────────────────────────────────────
@@ -525,6 +550,7 @@
           this.value = '';
           name.textContent = 'Choose file…';
           wrap.classList.remove('has-file');
+          updateRunBtn();
           return;
         }
         name.textContent = this.files[0].name;
@@ -533,10 +559,14 @@
         name.textContent = 'Choose file…';
         wrap.classList.remove('has-file');
       }
+      updateRunBtn();
     });
 
-    // Wire remove
-    row.querySelector('.fr-remove').addEventListener('click', () => removeRow(row));
+    // Wire the × : remove the row, or clear it when it's the only one left.
+    row.querySelector('.fr-remove').addEventListener('click', () => {
+      if (document.querySelectorAll('.file-row').length > 1) removeRow(row);
+      else clearRow(row);
+    });
     updateRemoveButtons();
 
     // Pre-fill with a File (bulk upload / drag-drop).
@@ -567,16 +597,29 @@
   function removeRow(row) {
     row.remove();
     updateRemoveButtons();
+    updateRunBtn();
   }
 
-  // Keep at least one row; disable the × when only one remains.
+  // Reset the last remaining row to its empty state (file + platform).
+  function clearRow(row) {
+    const input = row.querySelector('.fr-input');
+    input.value = '';
+    row.querySelector('.fr-name').textContent = 'Choose file…';
+    row.querySelector('.fr-wrap').classList.remove('has-file');
+    row.querySelector('.fr-select').value = '';
+    updateRunBtn();
+  }
+
+  // The × always works: it removes the row, or (when it's the last one) clears it.
   function updateRemoveButtons() {
     const rows = document.querySelectorAll('.file-row');
+    const single = rows.length <= 1;
     rows.forEach(r => {
       const btn = r.querySelector('.fr-remove');
-      btn.disabled = rows.length <= 1;
-      btn.style.opacity = rows.length <= 1 ? '0.3' : '1';
-      btn.style.cursor = rows.length <= 1 ? 'not-allowed' : 'pointer';
+      btn.disabled = false;
+      btn.style.opacity = '1';
+      btn.style.cursor = 'pointer';
+      btn.title = single ? 'Clear this file' : 'Remove this file';
     });
   }
 
@@ -597,6 +640,22 @@
     bulkDrop.addEventListener(ev, e => { e.preventDefault(); bulkDrop.classList.remove('dragover'); }));
   bulkDrop.addEventListener('drop', e => {
     if (e.dataTransfer && e.dataTransfer.files) handleBulkFiles(e.dataTransfer.files);
+  });
+
+  // Wire the content-plan input + drag & drop.
+  document.getElementById('plan-input').addEventListener('change', function () {
+    if (this.files.length) setPlanFile(this.files[0]);
+  });
+  const planDrop = document.getElementById('plan-drop');
+  ['dragenter', 'dragover'].forEach(ev =>
+    planDrop.addEventListener(ev, e => { e.preventDefault(); planDrop.classList.add('dragover'); }));
+  planDrop.addEventListener('dragleave', e => {
+    e.preventDefault();
+    if (!el('plan-input').files.length) planDrop.classList.remove('dragover');
+  });
+  planDrop.addEventListener('drop', e => {
+    e.preventDefault();
+    if (e.dataTransfer && e.dataTransfer.files.length) setPlanFile(e.dataTransfer.files[0]);
   });
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -638,44 +697,187 @@
       return;
     }
 
-    // UI: loading state
-    el('run-btn').disabled = true;
-    el('spinner').classList.add('active');
-    el('run-status').textContent =
-      picked.length > 1 ? `Running pipeline on ${picked.length} files…` : 'Running pipeline…';
-    hide('results');
-    hide('error-box');
-
     const form = new FormData();
     for (const p of picked) {
       form.append('files', p.file);
       form.append('platforms', p.platform);
     }
+    const msg = picked.length > 1 ? `Running pipeline on ${picked.length} files…` : 'Running pipeline…';
+    await submitRun('/run', form, msg, 'spinner', 'run-status');
+  }
+
+  // ── Shared: POST a run and render the merged result ───────────────────────────
+  async function submitRun(url, form, statusMsg, spinnerId, statusId) {
+    document.querySelectorAll('.run-trigger').forEach(b => b.disabled = true);
+    const sp = el(spinnerId), st = el(statusId);
+    sp.classList.add('active');
+    st.textContent = statusMsg;
+    hide('results');
+    hide('error-box');
 
     try {
-      const resp = await fetch('/run', { method: 'POST', body: form });
+      const resp = await fetch(url, { method: 'POST', body: form });
       const data = await resp.json();
-
       if (!resp.ok || data.error) {
-        el('error-box').textContent = data.error || 'Unknown error';
+        renderError(data);
         show('error-box');
         return;
       }
-
       renderResults(data);
       show('results');
     } catch (err) {
       el('error-box').textContent = 'Network error: ' + err.message;
       show('error-box');
     } finally {
-      el('run-btn').disabled = false;
-      el('spinner').classList.remove('active');
-      el('run-status').textContent = '';
+      document.querySelectorAll('.run-trigger').forEach(b => b.disabled = false);
+      updatePlanBtn();   // keep plan button disabled if no plan file chosen
+      updateRunBtn();    // keep Validate disabled if no CSV file chosen
+      sp.classList.remove('active');
+      st.textContent = '';
     }
+  }
+
+  // ── Content-plan (.ods/.xls/.xlsx) upload ─────────────────────────────────────
+  function isPlan(file) { return /\.(ods|xlsx?)$/i.test(file.name); }
+
+  function updatePlanBtn() {
+    const input = el('plan-input');
+    el('plan-btn').disabled = !(input.files && input.files.length);
+  }
+
+  // Enable "Validate" only when at least one row has a file chosen.
+  function updateRunBtn() {
+    const anyFile = Array.from(document.querySelectorAll('.fr-input'))
+      .some(i => i.files && i.files.length);
+    el('run-btn').disabled = !anyFile;
+  }
+
+  function setPlanFile(file) {
+    if (!isPlan(file)) {
+      toast('"' + file.name + '" is not an .ods, .xls or .xlsx file', 'error');
+      return;
+    }
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    el('plan-input').files = dt.files;
+    el('plan-drop').querySelector('span').innerHTML = '<b>' + escHtml(file.name) + '</b> — ready to convert';
+    el('plan-drop').classList.add('dragover');
+    updatePlanBtn();
+  }
+
+  async function runPlan() {
+    const input = el('plan-input');
+    if (!input.files || !input.files.length) {
+      toast('Please choose an .ods, .xls or .xlsx content plan', 'warn');
+      return;
+    }
+    const form = new FormData();
+    form.append('file', input.files[0]);
+    await submitRun('/run-plan', form, 'Converting & validating plan…', 'plan-spinner', 'plan-status');
   }
 
   // Last merged report — kept so the download buttons can serialize it.
   let lastResult = null;
+
+  // ── Errors ───────────────────────────────────────────────────────────────────
+  // A layout error lists every wrong column — a plan from another generation
+  // mismatches on all of them. The whole list stays reachable; it is paged so
+  // it doesn't bury the page, never truncated.
+  const LAYOUT_PAGE_SIZE = 15;
+  let layoutErrors = [];
+  let layoutTitle = '';
+  let layoutPage = 0;
+
+  function renderError(data) {
+    const box = el('error-box');
+    layoutErrors = data.layout_mismatches || [];
+    layoutTitle = data.error || 'Layout error';
+    layoutPage = 0;
+
+    if (!layoutErrors.length) {
+      box.textContent = data.error || 'Unknown error';
+      return;
+    }
+    renderLayoutPage();
+  }
+
+  function renderLayoutPage() {
+    const total = layoutErrors.length;
+    const pages = Math.ceil(total / LAYOUT_PAGE_SIZE);
+    layoutPage = Math.min(Math.max(layoutPage, 0), pages - 1);
+
+    const from = layoutPage * LAYOUT_PAGE_SIZE;
+    const shown = layoutErrors.slice(from, from + LAYOUT_PAGE_SIZE);
+
+    // start= keeps the numbering continuous across pages, so "column 47 of 89"
+    // stays locatable while working through the sheet.
+    const items = shown.map(m => `<li>${escHtml(m.message)}${
+      m.units && m.units.length
+        ? ` <span style="opacity:.65">— ${escHtml(m.units.join(', '))}</span>`
+        : ''
+    }</li>`).join('');
+
+    const pager = pages > 1 ? `
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+                  margin-top:14px;padding-top:12px;
+                  border-top:1px solid rgba(255,255,255,.12);">
+        <button type="button" class="dl-btn" onclick="layoutStep(-1)"
+                ${layoutPage === 0 ? 'disabled style="opacity:.4;cursor:not-allowed"' : ''}>← Назад</button>
+        <span style="opacity:.75;font-size:13px;">
+          ${from + 1}–${from + shown.length} из ${total} &nbsp;·&nbsp; стр. ${layoutPage + 1} из ${pages}
+        </span>
+        <button type="button" class="dl-btn" onclick="layoutStep(1)"
+                ${layoutPage === pages - 1 ? 'disabled style="opacity:.4;cursor:not-allowed"' : ''}>Вперёд →</button>
+      </div>` : '';
+
+    el('error-box').innerHTML = `
+      <div style="margin-bottom:10px;">
+        ${escHtml(layoutTitle)} <b>Неверных колонок: ${total}</b>
+      </div>
+      <ol start="${from + 1}" style="margin:0;padding-left:30px;line-height:1.7;">${items}</ol>
+      ${pager}`;
+  }
+
+  function layoutStep(delta) {
+    layoutPage += delta;
+    renderLayoutPage();
+    el('error-box').scrollIntoView({ block: 'nearest' });
+  }
+
+  // ── Skipped plan rows ────────────────────────────────────────────────────────
+  // Only content-plan runs carry `ingestion`; plain CSV runs have nothing to skip.
+  function renderIngestion(ing) {
+    if (!ing || !ing.skipped_rows) { hide('ingestion-card'); return; }
+
+    const noFile = ing.units_without_file || [];
+    const warn = noFile.length ? `
+      <p style="color:var(--yellow-t);font-size:13px;margin-bottom:12px;">
+        No file produced for <b>${noFile.map(escHtml).join(', ')}</b> — every row was incomplete.
+      </p>` : '';
+
+    const rows = (ing.by_unit || []).map(u => {
+      const missing = Object.entries(u.missing || {})
+        .sort((a, b) => b[1] - a[1])
+        .map(([col, n]) => `${escHtml(col)} ×${n}`)
+        .join(', ');
+      return `<tr><td>${escHtml(u.unit)}</td><td>${u.count}</td><td>${missing}</td></tr>`;
+    }).join('');
+
+    el('ingestion-body').innerHTML = `
+      <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">
+        <b style="color:var(--text)">${ing.skipped_rows}</b>
+        half-filled row${ing.skipped_rows === 1 ? '' : 's'} skipped — a plan row becomes a post
+        only when every mandatory column of that unit is filled.
+      </p>
+      ${warn}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Unit</th><th>Skipped</th><th>Missing columns</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+    show('ingestion-card');
+  }
 
   // ── Render results ───────────────────────────────────────────────────────────
   function renderResults(data) {
@@ -694,6 +896,8 @@
       <div class="stat"><div class="num">${Math.round(s.first_attempt_fix_rate * 100)}%</div>
         <div class="lbl">1st-attempt rate</div></div>
     `;
+
+    renderIngestion(data.ingestion);
 
     // Violations table
     if (!data.violations || data.violations.length === 0) {

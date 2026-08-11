@@ -25,7 +25,7 @@ spec** — and that is something code can check.
 ## Workflow
 
 ```
-  ODS/XLS content plan          publer-guard
+  ODS/XLS/XLSX content plan     publer-guard
   (one spreadsheet,      ┌──────────────────────────────────────┐
    filled by hand)  ───▶ │  Ingestion → Lint → Fix → Verify      │ ───▶  corrected CSVs
                          │  (converter)  (deterministic + agents) │       + report + trace
@@ -34,7 +34,7 @@ spec** — and that is something code can check.
                                                                   human uploads to Publer
 ```
 
-You upload the `.ods`/`.xls` content plan (or, if you already have them,
+You upload the `.ods`/`.xls`/`.xlsx` content plan (or, if you already have them,
 the split per-platform CSVs). publer-guard converts the plan into
 per-platform Publer CSVs, validates and repairs each one, and hands back
 corrected, import-ready files. A human makes the final call on uploading
@@ -68,24 +68,94 @@ validation rather than vibes.
 
 ## Input: the content plan
 
-The source is a single spreadsheet (`.ods`/`.xls`), sheet
-**`Контент-план`**, where each platform is a **block of columns** starting
-at row 0. The ingestion step reads each block and its content types:
+The source is a single spreadsheet (`.ods`, `.xls` or `.xlsx`), sheet
+**`Контент-план`**. One reader per format — `odfpy`, `xlrd`, `openpyxl` —
+each normalised to the same internal grid, so everything downstream is
+format-blind.
 
-| Block label (row 0) | Platform          | Content types                |
-|---------------------|-------------------|------------------------------|
-| `FACEBOOK`          | `facebook`        | posts, клипы (reels)         |
-| `@arcticdreamsofficial` | `instagram_band`   | posts, reels, stories    |
-| `@alex_y_yarvinen`  | `instagram_funnel`| posts, reels, stories        |
-| `YOUTUBE`           | `youtube`         | posts, video, shorts         |
-| `TIKTOK`            | `tiktok`          | video                        |
-| `TELEGRAM`          | `telegram`        | posts                        |
-| `TWITTER/X`         | `twitter`         | posts                        |
+> `.xls` note: xlrd compares a BIFF string's declared length (UTF-16 code
+> units) against `len()` of the decoded Python string, so a single emoji in a
+> formula's cached string result aborts the whole file with
+> `Expected CONTINUE record; found record-type 0x00BE`. `ingest.py` replaces
+> that one method with a code-unit-counting version for the duration of the
+> read. Every **content unit** — a post, clip, reel, video or
+shorts — occupies a fixed set of **absolute columns**, declared once in
+`PLAN_SPECS` (`src/ingest.py`):
 
-Each platform+type that has content becomes one output CSV, with the
-`Platform` assigned automatically from the block label. Hashtags are
-merged into the post text; the date/time cells become the `YYYY/MM/DD HH:MM`
-`Date` field.
+| Output file suffix           | Platform           | **Date** | **Time** | **Text** | **Media** | Hashtags | People | **Title** |
+|------------------------------|--------------------|------|------|------|-------|----------|--------|-------|
+| `FACEBOOK_OFFICIAL_POSTS`    | `facebook`         | A    | C    | E    | G     | H        | —      | —     |
+| `FACEBOOK_OFFICIAL_CLIPS`    | `facebook`         | A    | J    | K    | L     | M        | —      | —     |
+| `INSTAGRAMM_OFFICIAL_POSTS`  | `instagram_band`   | O    | Q    | S    | U     | V        | W      | —     |
+| `INSTAGRAMM_OFFICIAL_REELS`  | `instagram_band`   | O    | X    | Z    | AA    | AB       | AC     | —     |
+| `INSTAGRAMM_EXCLUSIVE_POSTS` | `instagram_funnel` | AH   | AJ   | AL   | AN    | AO       | AP     | —     |
+| `INSTAGRAMM_EXCLUSIVE_REELS` | `instagram_funnel` | AH   | AQ   | AR   | AS    | AT       | AU     | —     |
+| `YOUTUBE_POST`               | `youtube`          | AZ   | BB   | BD   | BF    | —        | —      | —     |
+| `YOUTUBE_VIDEO`              | `youtube`          | AZ   | BG   | BI   | BJ    | BK       | —      | BH    |
+| `YOUTUBE_SHORTS`             | `youtube`          | AZ   | BO   | BN   | BP    | BQ       | —      | BM    |
+| `TIKTOK`                     | `tiktok`           | BS   | BU   | BY   | BX    | BZ       | —      | —     |
+| `TELEGRAMM`                  | `telegram`         | CB   | CD   | CF   | CH    | —        | —      | —     |
+| `TWITTER`                    | `twitter`          | CJ   | CL   | CN   | CP    | CQ       | —      | —     |
+
+**Bold columns are mandatory.** A plan row becomes a CSV row **only if every
+mandatory column of that unit is filled** — Date, Time, Text, Media, plus
+Title for the units that have one. Miss any and the row is not a content
+unit; a unit with no complete row anywhere produces **no file at all**.
+Hashtags and People are the only optional columns.
+
+### Layout check
+
+Before a single row is converted, the header is walked **left to right** and
+every column must carry **exactly** the label the master template
+(`FULL_FINAL_CONTENT_PLAN_HEADING.xls`) puts there, somewhere in **sheet rows
+1-4**. Anything else and the file is refused, with every wrong column listed:
+
+```
+Колонка C: ожидается «Post publication time», найдено «Время публикации»
+Колонка BL: отсутствует заголовок «Shorts publication time»
+```
+
+The contract is `EXPECTED_HEADERS` — **all 89 labelled columns**, not just the
+ones the converter reads. That is what makes a *shifted* sheet detectable: a
+plan from an earlier generation puts its blocks at different offsets, and the
+mapped columns alone would often land on some neighbouring block's header and
+pass individually. Checking the whole header catches it on column A.
+
+The band is scanned rather than a single row because the template keeps the
+YouTube post sub-headers one row below the rest. Matching ignores surrounding
+whitespace and nothing else — a translated layout is a different layout.
+
+Merged cells need no special handling. A header merged *down* across rows
+keeps its text in its own column inside the band, so the scan finds it. A
+heading merged *across* columns — the block titles `FACEBOOK`, `YOUTUBE` in
+row 1 — names a group, not a column, and is never taken for a column header.
+
+Renaming a column in the template means updating `EXPECTED_HEADERS` in the
+same commit, or every upload is rejected.
+
+Rules of the conversion:
+
+- **Media must be a link.** "Filled in" is stricter here than for text: the
+  cell has to hold an `http(s)` URL. (Whether that URL is a *temporary*
+  Publer upload is not ingestion's call — the `media_url_permanent` rule
+  judges it.)
+- **Each unit is gated by its OWN time column**, because units sharing a date
+  (FB post + clip, IG post + reel, YT post + video + shorts) publish at
+  different times. A filled-in post time does not make the clip valid.
+- **Text is assembled** as text → hashtags → people tag, joined by blank
+  lines, into the single Publer `Text` field.
+- **The day-of-week column is ignored** — it's derivable from the date and
+  never reaches the CSV.
+- **Output files are named** `{plan file name}_{suffix}.csv`, e.g.
+  `AUG2026_PLAN_FACEBOOK_OFFICIAL_POSTS.csv`.
+- **Header rows need no special handling**: a row is data only if its date
+  cell parses as a real date.
+- **Skipped rows are accounted for, not swallowed.** Every half-filled row is
+  reported under `ingestion` in the run report — the unit, the 1-based sheet
+  row, and which mandatory column was empty — plus `units_without_file`,
+  which names the units that produced nothing at all. A row counts as
+  "started" only if a unit-specific column is filled, so a pre-filled
+  calendar column doesn't flag all twelve units on every date.
 
 ---
 
@@ -121,7 +191,7 @@ fields, not the Label column.
 ```
   ┌─────────────────────────────────────────────────────────────┐
   │  Ingestion (deterministic converter)                         │
-  │  .ods/.xls content plan  ──▶  per-platform 12-col Publer CSV  │
+  │  .ods/.xls/.xlsx plan  ──▶  per-unit 12-col Publer CSVs       │
   └───────────────────────────────┬─────────────────────────────┘
                                    ▼
                          ┌────────────────────┐
@@ -163,7 +233,7 @@ fields, not the Label column.
 
 | Component | Kind | Model | Responsibility |
 |-----------|------|-------|----------------|
-| **Ingestion** | **deterministic** | — | Reads the `.ods`/`.xls` content plan and emits per-platform, per-type CSVs in the 12-column Publer template, assigning `Platform` from the block label. A pure spreadsheet→CSV transform with a fixed column map — no LLM. |
+| **Ingestion** | **deterministic** | — | Reads the `.ods`/`.xls`/`.xlsx` content plan and emits one 12-column Publer CSV per content unit that has media, assigning `Platform` from the unit's spec. A pure spreadsheet→CSV transform with a fixed absolute-column map — no LLM. |
 | **Orchestrator** | plain code | — | Owns `PipelineState`, runs lint→triage→fix→verify→critic loop, enforces retry limits and gates. Holds all control flow so agents stay dumb and replaceable. |
 | **Linter** | **deterministic** | — | The ground truth. Pure Python rules, each returns a structured `Violation`. An agent cannot create or dismiss a violation. |
 | **Triage** | LLM | Haiku 4.5 | Groups violations, decides fix order, separates auto-fixable from human-only. Cheap model — this is light reasoning, not generation. |
@@ -276,7 +346,7 @@ Two front-ends over the same pipeline:
   Writes `<stem>_fixed.csv`, `<stem>_report.json`, `<stem>_trace.json`.
 - **Web UI** (`src/app.py`, Flask) — `python -m src.app`, then
   <http://localhost:5000>. Supports:
-  - **content-plan upload** — drop an `.ods`/`.xls` plan and it's sliced
+  - **content-plan upload** — drop an `.ods`/`.xls`/`.xlsx` plan and it's sliced
     into per-platform CSVs automatically;
   - **multi-file input** — one `Platform` per file, add rows with **+**;
   - **bulk upload** — pick many CSVs in one dialog (or drag-and-drop);

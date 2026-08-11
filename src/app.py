@@ -9,11 +9,11 @@ Opens at http://localhost:5000
 
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
-
+import csv
 import io
+import tempfile
 import zipfile
+from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request, send_file, send_from_directory
 
@@ -25,6 +25,14 @@ except ImportError:
 
 from .agents import AnthropicClient, CriticAgent, FixerAgent, TriageAgent
 from .cli import build_report, parse_csv, write_fixed_csv
+from .ingest import (
+    PLAN_EXTENSIONS,
+    PUBLER_HEADER,
+    PlanLayoutError,
+    PlanSlices,
+    row_to_publer,
+    slice_plan,
+)
 from .orchestrator import Orchestrator
 from .state import Platform, PipelineState
 from .verifier import Verifier
@@ -79,6 +87,72 @@ def _run_one(uploaded, platform: Platform, max_retries: int) -> dict:
 
     finally:
         tmp_path.unlink(missing_ok=True)
+
+
+def _run_plan_file(plan, max_retries: int) -> dict:
+    """Run the pipeline on one PlanCsv sliced from a content plan. Rows are
+    already CsvRow objects with the platform assigned; output is written as a
+    12-column Publer import template."""
+    client = AnthropicClient()
+    orch = Orchestrator(
+        triage=TriageAgent(client),
+        fixer=FixerAgent(client),
+        critic=CriticAgent(client),
+        verifier=Verifier(),
+    )
+    state = PipelineState(rows=plan.rows, max_retries_per_violation=max_retries)
+    state = orch.run(state)
+
+    _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    fixed_name = f"{plan.name}_fixed.csv"
+    with (_OUTPUT_DIR / fixed_name).open("w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(PUBLER_HEADER)
+        for row in state.rows:
+            writer.writerow(row_to_publer(row))
+
+    display = f"{plan.name}.csv"
+    report = build_report(state)
+    report["fixed_csv"] = fixed_name
+    report["filename"] = display
+    report["platform"] = plan.platform.value
+    for v in report["violations"]:
+        v["file"] = display
+    for a in report["attempts"]:
+        a["file"] = display
+    return report
+
+
+_MAX_SKIPPED_DETAIL = 200   # enough to find the gaps; keeps the payload sane
+
+
+def _ingestion_report(sliced: PlanSlices) -> dict:
+    """Account for the plan rows ingestion dropped.
+
+    A half-filled row silently vanishes, which makes a missing output file
+    baffling. This turns that into a stated number with a reason: which unit,
+    which sheet row, and which mandatory column was empty.
+    """
+    by_unit: dict[str, dict] = {}
+    for row in sliced.skipped:
+        entry = by_unit.setdefault(row.unit, {"unit": row.unit, "count": 0, "missing": {}})
+        entry["count"] += 1
+        for field_name in row.missing:
+            entry["missing"][field_name] = entry["missing"].get(field_name, 0) + 1
+
+    produced = {plan.unit for plan in sliced.files}
+    return {
+        "skipped_rows": len(sliced.skipped),
+        # Busiest units first — that's where the plan needs attention.
+        "by_unit": sorted(by_unit.values(), key=lambda e: -e["count"]),
+        # The ones that explain an absent file entirely.
+        "units_without_file": sorted(u for u in by_unit if u not in produced),
+        "rows": [
+            {"unit": r.unit, "sheet_row": r.sheet_row, "missing": list(r.missing)}
+            for r in sliced.skipped[:_MAX_SKIPPED_DETAIL]
+        ],
+        "rows_truncated": len(sliced.skipped) > _MAX_SKIPPED_DETAIL,
+    }
 
 
 def _merge_reports(reports: list[dict]) -> dict:
@@ -184,6 +258,69 @@ def run():
 
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/run-plan", methods=["POST"])
+def run_plan():
+    """Ingest a spreadsheet content plan: slice it into per-unit CSVs,
+    run each through the pipeline, and return one merged report."""
+    uploaded = request.files.get("file")
+    if not uploaded or not uploaded.filename:
+        return jsonify({"error": "Файл плана не выбран"}), 400
+
+    ext = Path(uploaded.filename).suffix.lower()
+    if ext not in PLAN_EXTENSIONS:
+        allowed = " / ".join(PLAN_EXTENSIONS)
+        return jsonify({"error": f"Только {allowed} файлы контент-плана"}), 400
+
+    max_retries = int(request.form.get("max_retries", 2))
+
+    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+        uploaded.save(tmp.name)
+        tmp_path = Path(tmp.name)
+
+    try:
+        # Pass the upload's real name: output files are prefixed with it,
+        # and tmp_path is a random temp name.
+        sliced = slice_plan(tmp_path, source_name=uploaded.filename)
+        if not sliced.files:
+            detail = (
+                f" Пропущено незаполненных строк: {len(sliced.skipped)}."
+                if sliced.skipped else ""
+            )
+            return jsonify({
+                "error": "В плане не найдено ни одного поста "
+                         f"(лист «Контент-план»?).{detail}"
+            }), 400
+
+        reports = [_run_plan_file(plan, max_retries) for plan in sliced.files]
+        merged = _merge_reports(reports)
+        merged["ingestion"] = _ingestion_report(sliced)
+        return jsonify(merged)
+
+    except PlanLayoutError as exc:
+        # Layout is wrong — nothing was converted. Every mismatch is returned,
+        # however many: fixing the sheet means seeing all of them, so the UI
+        # pages through the list rather than the server truncating it.
+        return jsonify({
+            "error": "Макет не совпадает с шаблоном — необходимо поправить макет.",
+            "layout_mismatches": [
+                {
+                    "column": m.column,
+                    "expected": m.expected,
+                    "found": m.found,
+                    "units": list(m.units),
+                    "message": m.message(),
+                }
+                for m in exc.mismatches
+            ],
+        }), 400
+
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 @app.route("/download/<path:filename>")
