@@ -107,13 +107,27 @@ class TestDateFormat:
         assert len(v) == 1
         assert v[0].rule_id == "date_format"
 
-    def test_date_only_no_time_fires(self):
-        v = check_date_format(_row(date="2026/06/24"))
+    def test_date_without_a_time_is_clean(self):
+        """Leaving the hour out is an editorial choice — the post is dated and
+        gets scheduled by hand in Publer."""
+        assert check_date_format(_row(date="2026/06/24")) == []
+
+    def test_an_empty_date_still_fires(self):
+        """The time is optional; the date is not — there is nothing to
+        schedule without one."""
+        v = check_date_format(_row(date=""))
         assert len(v) == 1
         assert v[0].rule_id == "date_format"
 
+    def test_a_date_with_a_broken_time_fires(self):
+        """Half a time is a mistake, not a choice."""
+        for broken in ("2026/06/24 18", "2026/06/24 18:", "2026/06/24 25:00"):
+            v = check_date_format(_row(date=broken))
+            assert len(v) == 1, broken
+
     def test_leading_trailing_whitespace_is_tolerated(self):
         assert check_date_format(_row(date="  2026/06/24 18:00  ")) == []
+        assert check_date_format(_row(date="  2026/06/24  ")) == []
 
     def test_midnight_is_valid(self):
         assert check_date_format(_row(date="2026/01/01 00:00")) == []

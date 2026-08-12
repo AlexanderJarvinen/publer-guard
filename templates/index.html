@@ -389,14 +389,31 @@
   <div class="error-box hidden" id="error-box"></div>
 
   <!-- ── Results ── -->
+  <!-- Live progress, in the slot the summary cards take once the run is done -->
+  <div class="card hidden" id="progress">
+    <div id="progress-body"></div>
+  </div>
+
   <div id="results" class="hidden">
 
     <!-- Summary -->
     <div class="summary-grid" id="summary-grid"></div>
 
-    <!-- Skipped plan rows (content-plan runs only) -->
+    <!-- Post-fix lint -->
+    <div class="card" id="lint-card">
+      <h2>Post-fix re-lint</h2>
+      <div class="lint-status" id="lint-status"></div>
+    </div>
+
+    <!-- Monitoring -->
+    <div class="card" id="monitoring-card">
+      <h2>LLM calls</h2>
+      <div id="monitoring-body"></div>
+    </div>
+
+    <!-- Unfinished plan rows (content-plan runs only) -->
     <div class="card hidden" id="ingestion-card">
-      <h2>Skipped plan rows</h2>
+      <h2>Незаполненные строки плана</h2>
       <div id="ingestion-body"></div>
     </div>
 
@@ -418,18 +435,6 @@
           <tbody id="violations-body"></tbody>
         </table>
       </div>
-    </div>
-
-    <!-- Post-fix lint -->
-    <div class="card" id="lint-card">
-      <h2>Post-fix re-lint</h2>
-      <div class="lint-status" id="lint-status"></div>
-    </div>
-
-    <!-- Monitoring -->
-    <div class="card" id="monitoring-card">
-      <h2>LLM calls</h2>
-      <div id="monitoring-body"></div>
     </div>
 
     <!-- Download -->
@@ -717,9 +722,13 @@
 
     try {
       const resp = await fetch(url, { method: 'POST', body: form });
-      const data = await resp.json();
-      if (!resp.ok || data.error) {
-        renderError(data);
+      // A plan run streams a line per file so the page can show progress;
+      // everything else answers in one piece.
+      const streaming = (resp.headers.get('content-type') || '').includes('x-ndjson');
+      const data = streaming ? await readProgressStream(resp) : await resp.json();
+
+      if (!resp.ok || !data || data.error) {
+        renderError(data || {});
         show('error-box');
         return;
       }
@@ -729,12 +738,91 @@
       el('error-box').textContent = 'Network error: ' + err.message;
       show('error-box');
     } finally {
+      stopProgress();
       document.querySelectorAll('.run-trigger').forEach(b => b.disabled = false);
       updatePlanBtn();   // keep plan button disabled if no plan file chosen
       updateRunBtn();    // keep Validate disabled if no CSV file chosen
       sp.classList.remove('active');
       st.textContent = '';
     }
+  }
+
+  // ── Progress ─────────────────────────────────────────────────────────────────
+  // The server sends one NDJSON line per file before it starts on it, then a
+  // final line with the whole report. Reading as it arrives is what makes a
+  // minute-long run legible instead of looking hung.
+  async function readProgressStream(resp) {
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let payload = null;
+
+    startProgress();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split('\n');
+      buffer = lines.pop();               // keep the unfinished tail
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const msg = JSON.parse(line);
+        if (msg.progress) updateProgress(msg.progress);
+        else payload = msg.result || msg;   // result, or an error object
+      }
+    }
+    return payload;
+  }
+
+  const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  let progressTimer = null;
+  let progressStarted = 0;
+  let progressFrame = 0;
+  let progressState = null;
+
+  function startProgress() {
+    progressStarted = Date.now();
+    progressFrame = 0;
+    progressState = { done: 0, total: 0, unit: '', rows: 0 };
+    show('progress');
+    clearInterval(progressTimer);
+    progressTimer = setInterval(paintProgress, 90);
+    paintProgress();
+  }
+
+  function updateProgress(p) {
+    progressState = p;
+    paintProgress();
+  }
+
+  function stopProgress() {
+    clearInterval(progressTimer);
+    progressTimer = null;
+    hide('progress');
+  }
+
+  function paintProgress() {
+    if (!progressState) return;
+    const { done, total, unit, rows } = progressState;
+    const spin = SPINNER[progressFrame++ % SPINNER.length];
+    const seconds = Math.floor((Date.now() - progressStarted) / 1000);
+    const pct = total ? Math.round((done / total) * 100) : 0;
+
+    el('progress-body').innerHTML = `
+      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">
+        <span style="color:var(--accent);font-size:15px;">${spin}</span>
+        <span style="color:var(--text);font-size:14px;">
+          ${unit ? escHtml(unit) : 'Разбор плана'}
+        </span>
+        <span style="color:var(--muted);font-size:13px;">
+          ${total ? `${done + 1} из ${total}` : ''}${rows ? ` · ${rows} ${plural(rows, 'пост', 'постов')}` : ''}
+          · ${seconds}s
+        </span>
+      </div>
+      <div style="margin-top:10px;height:3px;border-radius:2px;background:var(--border);overflow:hidden;">
+        <div style="height:100%;width:${pct}%;background:var(--accent);transition:width .3s;"></div>
+      </div>`;
   }
 
   // ── Content-plan (.ods/.xls/.xlsx) upload ─────────────────────────────────────
@@ -844,39 +932,95 @@
     el('error-box').scrollIntoView({ block: 'nearest' });
   }
 
-  // ── Skipped plan rows ────────────────────────────────────────────────────────
-  // Only content-plan runs carry `ingestion`; plain CSV runs have nothing to skip.
+  // ── Unfinished plan rows ─────────────────────────────────────────────────────
+  // Only content-plan runs carry `ingestion`. Rows where nothing at all was
+  // filled never reach here — those units simply weren't planned that day.
+  const INGEST_PAGE_SIZE = 20;
+  let ingestData = null;
+  let ingestPage = 0;
+
+  // Russian agreement: 1 строка, 2-4 строки, 5 строк. Only the two forms the
+  // summary line needs — singular for 1 (and 21, 31…), plural otherwise.
+  function plural(n, one, many) {
+    return (n % 10 === 1 && n % 100 !== 11) ? one : many;
+  }
+
   function renderIngestion(ing) {
-    if (!ing || !ing.skipped_rows) { hide('ingestion-card'); return; }
+    ingestData = ing;
+    ingestPage = 0;
+    if (!ing || !ing.warnings) { hide('ingestion-card'); return; }
+    renderIngestionPage();
+    show('ingestion-card');
+  }
+
+  function renderIngestionPage() {
+    const ing = ingestData;
+    const all = ing.rows || [];
+    const total = ing.warnings;
+    const pages = Math.max(1, Math.ceil(all.length / INGEST_PAGE_SIZE));
+    ingestPage = Math.min(Math.max(ingestPage, 0), pages - 1);
+
+    const from = ingestPage * INGEST_PAGE_SIZE;
+    const shown = all.slice(from, from + INGEST_PAGE_SIZE);
 
     const noFile = ing.units_without_file || [];
     const warn = noFile.length ? `
       <p style="color:var(--yellow-t);font-size:13px;margin-bottom:12px;">
-        No file produced for <b>${noFile.map(escHtml).join(', ')}</b> — every row was incomplete.
+        Файл не создан для <b>${noFile.map(escHtml).join(', ')}</b>.
       </p>` : '';
 
-    const rows = (ing.by_unit || []).map(u => {
+    const summary = (ing.by_unit || []).map(u => {
       const missing = Object.entries(u.missing || {})
         .sort((a, b) => b[1] - a[1])
-        .map(([col, n]) => `${escHtml(col)} ×${n}`)
+        .map(([label, n]) => `${escHtml(label)} ×${n}`)
         .join(', ');
       return `<tr><td>${escHtml(u.unit)}</td><td>${u.count}</td><td>${missing}</td></tr>`;
     }).join('');
 
+    // A missing hashtag still publishes; an unfinished row does not. Same
+    // list, dimmer colour, so the blocking ones stay the loud ones.
+    const items = shown.map(r => `
+      <li style="color:${r.kind === 'no_hashtags' ? 'var(--muted)' : 'var(--yellow-t)'}">
+        ${escHtml(r.message)}
+      </li>`).join('');
+
+    const pager = pages > 1 ? `
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px;">
+        <button type="button" class="dl-btn" onclick="ingestStep(-1)"
+                ${ingestPage === 0 ? 'disabled style="opacity:.4;cursor:not-allowed"' : ''}>← Назад</button>
+        <span style="color:var(--muted);font-size:13px;">
+          ${from + 1}–${from + shown.length} из ${all.length} &nbsp;·&nbsp; стр. ${ingestPage + 1} из ${pages}
+        </span>
+        <button type="button" class="dl-btn" onclick="ingestStep(1)"
+                ${ingestPage === pages - 1 ? 'disabled style="opacity:.4;cursor:not-allowed"' : ''}>Вперёд →</button>
+      </div>` : '';
+
     el('ingestion-body').innerHTML = `
       <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">
-        <b style="color:var(--text)">${ing.skipped_rows}</b>
-        half-filled row${ing.skipped_rows === 1 ? '' : 's'} skipped — a plan row becomes a post
-        only when every mandatory column of that unit is filled.
+        <b style="color:var(--text)">${total}</b>
+        ${total === 1 ? 'предупреждение' : 'предупреждений'}:
+        <b style="color:var(--yellow-t)">${ing.incomplete_rows}</b> ${plural(ing.incomplete_rows,
+          'строка не дозаполнена', 'строк не дозаполнено')},
+        <b>${ing.posts_without_hashtags}</b> ${plural(ing.posts_without_hashtags,
+          'пост без хэштегов', 'постов без хэштегов')}.
+        Полностью пустые строки не в счёт — там единицу контента просто не планировали.
       </p>
       ${warn}
-      <div class="table-wrap">
+      <div class="table-wrap" style="margin-bottom:14px;">
         <table>
-          <thead><tr><th>Unit</th><th>Skipped</th><th>Missing columns</th></tr></thead>
-          <tbody>${rows}</tbody>
+          <thead><tr><th>Единица</th><th>Строк</th><th>Не заполнено</th></tr></thead>
+          <tbody>${summary}</tbody>
         </table>
-      </div>`;
-    show('ingestion-card');
+      </div>
+      <ol start="${from + 1}" style="margin:0;padding-left:30px;line-height:1.8;
+                                     color:var(--yellow-t);font-size:13px;">${items}</ol>
+      ${pager}`;
+  }
+
+  function ingestStep(delta) {
+    ingestPage += delta;
+    renderIngestionPage();
+    el('ingestion-card').scrollIntoView({ block: 'nearest' });
   }
 
   // ── Render results ───────────────────────────────────────────────────────────
@@ -974,11 +1118,23 @@
         <line x1="12" y1="15" x2="12" y2="3"/></svg>`;
     const outFiles = data.files || (data.fixed_csv ? [{ fixed_csv: data.fixed_csv, filename: data.fixed_csv, platform: '' }] : []);
 
-    let linksHtml = outFiles.map(f => `
-      <a class="dl-btn" href="/download/${encodeURIComponent(f.fixed_csv)}">
-        ${dlIcon}
-        ${escHtml(f.filename)}${f.platform ? ` <span style="color:var(--muted);font-weight:400">· ${escHtml(f.platform)}</span>` : ''}
-      </a>`).join('');
+    // A CSV built from a partly filled plan carries posts with holes in them.
+    // Say so on the download itself — a warning further up the page is easy
+    // to import straight past.
+    let linksHtml = outFiles.map(f => {
+      const gaps = f.unfinished_rows || [];
+      const note = gaps.length ? `
+        <div style="color:var(--yellow-t);font-size:12px;margin:-4px 0 2px 6px;">
+          ⚠ ${f.row_count} ${plural(f.row_count, 'пост', 'постов')} в файле,
+          ${gaps.length} ${plural(gaps.length, 'не дозаполнен', 'не дозаполнено')} —
+          ${plural(gaps.length, 'строка', 'строки')} плана ${gaps.join(', ')}
+        </div>` : '';
+      return `
+        <a class="dl-btn" href="/download/${encodeURIComponent(f.fixed_csv)}">
+          ${dlIcon}
+          ${escHtml(f.filename)}${f.platform ? ` <span style="color:var(--muted);font-weight:400">· ${escHtml(f.platform)}</span>` : ''}
+        </a>${note}`;
+    }).join('');
 
     // "Download all" ZIP — only meaningful with more than one file.
     if (outFiles.length > 1) {

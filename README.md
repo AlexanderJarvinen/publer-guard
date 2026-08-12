@@ -150,12 +150,24 @@ Rules of the conversion:
   `AUG2026_PLAN_FACEBOOK_OFFICIAL_POSTS.csv`.
 - **Header rows need no special handling**: a row is data only if its date
   cell parses as a real date.
-- **Skipped rows are accounted for, not swallowed.** Every half-filled row is
-  reported under `ingestion` in the run report — the unit, the 1-based sheet
-  row, and which mandatory column was empty — plus `units_without_file`,
-  which names the units that produced nothing at all. A row counts as
-  "started" only if a unit-specific column is filled, so a pre-filled
-  calendar column doesn't flag all twelve units on every date.
+- **Whatever is filled is what gets written.** A gap may be deliberate — a
+  time left empty to schedule inside Publer — so ingestion never decides a row
+  isn't wanted. A row with no time becomes a bare `YYYY/MM/DD`; nothing is
+  invented to fill a hole.
+- **A unit is skipped only when nobody started it.** A row with no content of
+  its own — no text, media or title — means the unit wasn't planned that day
+  and passes in silence; a unit with no such row anywhere produces no file.
+  Date and time don't count as "started": the date column is shared by a whole
+  block and the time column is a formula dragged down every row, so both are
+  filled a month ahead and say nothing about any one unit.
+- **Gaps come back as warnings, not as deletions.** Each names the unit, the
+  1-based sheet row and the empty cells. A finished post with no hashtags
+  warns too — optional, published either way, but more often an oversight
+  than a decision.
+- **A half-finished CSV says so where it is downloaded.** The file carries how
+  many posts it holds and which plan rows still have gaps, because a warning
+  elsewhere on the page is too easy to import straight past.
+  `units_without_file` names the units that produced nothing at all.
 
 ---
 
@@ -167,7 +179,7 @@ official bulk-import template: `utf-8-sig` (BOM), comma-delimited, exactly
 
 | # | Column (template header)                         | Used by rule / role |
 |---|--------------------------------------------------|---------------------|
-| 0 | `Date - Intl. format or prompt`                  | `date_format` — must be `YYYY/MM/DD HH:MM` |
+| 0 | `Date - Intl. format or prompt`                  | `date_format` — `YYYY/MM/DD HH:MM`, or `YYYY/MM/DD` when the hour is left to Publer |
 | 1 | `Text`                                           | `twitter_length`, `cta_format`, `hashtags_2084`, `no_cyrillic` — the published caption (hashtags merged in) |
 | 2 | `Link(s) - Separated by comma for FB carousels`  | `link_empty` — must be empty |
 | 3 | `Media URL(s) - Separated by comma`              | `media_url_permanent` — no `/uploads/tmp/` |
@@ -234,7 +246,7 @@ fields, not the Label column.
 | Component | Kind | Model | Responsibility |
 |-----------|------|-------|----------------|
 | **Ingestion** | **deterministic** | — | Reads the `.ods`/`.xls`/`.xlsx` content plan and emits one 12-column Publer CSV per content unit that has media, assigning `Platform` from the unit's spec. A pure spreadsheet→CSV transform with a fixed absolute-column map — no LLM. |
-| **Orchestrator** | plain code | — | Owns `PipelineState`, runs lint→triage→fix→verify→critic loop, enforces retry limits and gates. Holds all control flow so agents stay dumb and replaceable. |
+| **Orchestrator** | plain code | — | Owns `PipelineState`, runs lint→triage→fix→verify→critic loop, enforces retry limits and gates. Holds all control flow so agents stay dumb and replaceable. Fixes rows in parallel (see below). |
 | **Linter** | **deterministic** | — | The ground truth. Pure Python rules, each returns a structured `Violation`. An agent cannot create or dismiss a violation. |
 | **Triage** | LLM | Haiku 4.5 | Groups violations, decides fix order, separates auto-fixable from human-only. Cheap model — this is light reasoning, not generation. |
 | **Fixer** | LLM | Sonnet 4.6 | Proposes a single row edit for a single violation. Sees only that violation + that row — never the whole file or other agents' reasoning. |
@@ -246,6 +258,27 @@ the cheap model does the cheap thinking, the expensive model is reserved
 for the rare hard case. Ingestion is deliberately **not** an agent —
 mapping spreadsheet columns to CSV columns is a fixed, mechanical
 transform with a single correct answer.
+
+### Fixing rows in parallel
+
+Violations on the **same row** run one after another — each rewrites the text
+the next one reads. Different rows share nothing, so they run at once, up to
+`MAX_PARALLEL_ROWS`. A file of six identical CTA repairs went from 45s to 11s.
+
+Each row fixes on a private copy (`_RowWork`) holding its own row, attempts,
+escalations and trace lines; they are merged back into `PipelineState` in
+submission order once every row is done. That buys two things a shared state
+would lose under threads: `attempts[-1]` still means "the attempt I just made"
+(the retry path amends it), and **the trace reads identically on every run**
+regardless of which thread finished first — it is the demo material, so a
+report that reshuffles itself would be worse than a slow one.
+
+### Progress
+
+`/run-plan` streams NDJSON — a line per file before work on it starts, then a
+final line with the whole report. A plan with real violations is a minute of
+model round trips; without this the browser shows a spinner and no evidence
+anything is happening.
 
 ---
 

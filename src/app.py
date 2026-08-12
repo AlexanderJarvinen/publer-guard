@@ -11,11 +11,22 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import tempfile
 import zipfile
+from collections import Counter
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request, send_file, send_from_directory
+from flask import (
+    Flask,
+    Response,
+    jsonify,
+    render_template,
+    request,
+    send_file,
+    send_from_directory,
+    stream_with_context,
+)
 
 try:
     from dotenv import load_dotenv
@@ -26,7 +37,9 @@ except ImportError:
 from .agents import AnthropicClient, CriticAgent, FixerAgent, TriageAgent
 from .cli import build_report, parse_csv, write_fixed_csv
 from .ingest import (
+    EXPECTED_HEADERS,
     PLAN_EXTENSIONS,
+    PLAN_SPECS,
     PUBLER_HEADER,
     PlanLayoutError,
     PlanSlices,
@@ -116,6 +129,9 @@ def _run_plan_file(plan, max_retries: int) -> dict:
     report["fixed_csv"] = fixed_name
     report["filename"] = display
     report["platform"] = plan.platform.value
+    # What this particular CSV is missing, said where it gets downloaded.
+    report["row_count"] = len(plan.rows)
+    report["unfinished_rows"] = list(plan.unfinished)
     for v in report["violations"]:
         v["file"] = display
     for a in report["attempts"]:
@@ -123,35 +139,44 @@ def _run_plan_file(plan, max_retries: int) -> dict:
     return report
 
 
-_MAX_SKIPPED_DETAIL = 200   # enough to find the gaps; keeps the payload sane
-
-
 def _ingestion_report(sliced: PlanSlices) -> dict:
-    """Account for the plan rows ingestion dropped.
+    """Everything ingestion wants to tell the author about the plan.
 
-    A half-filled row silently vanishes, which makes a missing output file
-    baffling. This turns that into a stated number with a reason: which unit,
-    which sheet row, and which mandatory column was empty.
+    Two kinds, both advisory: a row started and not finished (it never becomes
+    a post), and a finished post with no hashtags (it publishes as written).
+    Every warning is returned — the UI pages through them — with the unit, the
+    sheet row and the cells at issue.
     """
     by_unit: dict[str, dict] = {}
-    for row in sliced.skipped:
-        entry = by_unit.setdefault(row.unit, {"unit": row.unit, "count": 0, "missing": {}})
+    for warning in sliced.warnings:
+        entry = by_unit.setdefault(
+            warning.unit, {"unit": warning.unit, "count": 0, "missing": {}}
+        )
         entry["count"] += 1
-        for field_name in row.missing:
-            entry["missing"][field_name] = entry["missing"].get(field_name, 0) + 1
+        for label in warning.labelled():
+            entry["missing"][label] = entry["missing"].get(label, 0) + 1
 
     produced = {plan.unit for plan in sliced.files}
+    kinds = Counter(w.kind for w in sliced.warnings)
     return {
-        "skipped_rows": len(sliced.skipped),
+        "warnings": len(sliced.warnings),
+        "incomplete_rows": kinds["incomplete"],
+        "posts_without_hashtags": kinds["no_hashtags"],
         # Busiest units first — that's where the plan needs attention.
         "by_unit": sorted(by_unit.values(), key=lambda e: -e["count"]),
-        # The ones that explain an absent file entirely.
-        "units_without_file": sorted(u for u in by_unit if u not in produced),
+        # Named from the specs, not from the warnings: a unit can end up with
+        # no file having produced no warning at all, and that still needs saying.
+        "units_without_file": [s.suffix for s in PLAN_SPECS if s.suffix not in produced],
         "rows": [
-            {"unit": r.unit, "sheet_row": r.sheet_row, "missing": list(r.missing)}
-            for r in sliced.skipped[:_MAX_SKIPPED_DETAIL]
+            {
+                "unit": w.unit,
+                "sheet_row": w.sheet_row,
+                "kind": w.kind,
+                "columns": list(w.columns),
+                "message": w.message(),
+            }
+            for w in sliced.warnings
         ],
-        "rows_truncated": len(sliced.skipped) > _MAX_SKIPPED_DETAIL,
     }
 
 
@@ -220,6 +245,9 @@ def _merge_reports(reports: list[dict]) -> dict:
                 "platform": r["platform"],
                 "fixed_csv": r["fixed_csv"],
                 "summary": r["summary"],
+                # Absent for plain CSV uploads — nothing was sliced there.
+                "row_count": r.get("row_count"),
+                "unfinished_rows": r.get("unfinished_rows", []),
             }
             for r in reports
         ],
@@ -285,18 +313,47 @@ def run_plan():
         sliced = slice_plan(tmp_path, source_name=uploaded.filename)
         if not sliced.files:
             detail = (
-                f" Пропущено незаполненных строк: {len(sliced.skipped)}."
-                if sliced.skipped else ""
+                f" Незаполненных до конца строк: {len(sliced.warnings)}."
+                if sliced.warnings else ""
             )
             return jsonify({
                 "error": "В плане не найдено ни одного поста "
                          f"(лист «Контент-план»?).{detail}"
             }), 400
 
-        reports = [_run_plan_file(plan, max_retries) for plan in sliced.files]
-        merged = _merge_reports(reports)
-        merged["ingestion"] = _ingestion_report(sliced)
-        return jsonify(merged)
+        # Reading is done; everything below works from memory. Freeing the
+        # upload here keeps the cleanup out of the streaming generator, which
+        # outlives this function.
+        tmp_path.unlink(missing_ok=True)
+
+        # A plan with real violations in it takes a minute of model round
+        # trips. Streaming a line per file turns that from a hung browser tab
+        # into something with a progress bar.
+        def report_progress():
+            total = len(sliced.files)
+            try:
+                reports = []
+                for done, plan in enumerate(sliced.files):
+                    yield json.dumps({"progress": {
+                        "done": done,
+                        "total": total,
+                        "unit": plan.unit,
+                        "rows": len(plan.rows),
+                    }}, ensure_ascii=False) + "\n"
+                    reports.append(_run_plan_file(plan, max_retries))
+
+                merged = _merge_reports(reports)
+                merged["ingestion"] = _ingestion_report(sliced)
+                yield json.dumps({"result": merged}, ensure_ascii=False) + "\n"
+            except Exception as exc:   # noqa: BLE001 — reported, not swallowed
+                # The status line is already 200 by now, so a failure has to
+                # travel as a payload rather than a status code.
+                yield json.dumps({"error": str(exc)}, ensure_ascii=False) + "\n"
+
+        return Response(
+            stream_with_context(report_progress()),
+            mimetype="application/x-ndjson",
+        )
 
     except PlanLayoutError as exc:
         # Layout is wrong — nothing was converted. Every mismatch is returned,

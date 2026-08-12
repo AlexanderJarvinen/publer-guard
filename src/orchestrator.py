@@ -10,6 +10,8 @@ No agent's opinion is ever treated as a verdict.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from typing import Optional
 
 from .agents import (
@@ -20,8 +22,32 @@ from .agents import (
     ViolationRef,
 )
 from .linter import lint_all
-from .state import CsvRow, FixAttempt, FixOutcome, PipelineState, Violation
+from .state import CsvRow, FixAttempt, FixOutcome, PipelineState, TraceEvent, Violation
 from .verifier import Verifier
+
+# Fixing one violation is a round trip to a model, sometimes three. Rows are
+# independent of each other, so they need not wait in line. Kept modest: the
+# ceiling here is someone's rate limit, not this machine.
+MAX_PARALLEL_ROWS = 6
+
+
+@dataclass
+class _RowWork:
+    """One row's fixing session, kept off the shared state.
+
+    Everything a fix produces — the rewritten row, its attempts, escalations
+    and trace lines — accumulates here and is merged back in a fixed order
+    once all rows are done. That keeps two things true under parallelism:
+    `attempts[-1]` still means "the attempt I just made", and the trace reads
+    the same on every run regardless of which thread finished first.
+    """
+    row: CsvRow
+    attempts: list[FixAttempt] = field(default_factory=list)
+    escalations: list[Violation] = field(default_factory=list)
+    trace: list[TraceEvent] = field(default_factory=list)
+
+    def log(self, step: str, detail: str, **payload) -> None:
+        self.trace.append(TraceEvent(step=step, detail=detail, payload=payload))
 
 
 def _fallback_triage(violations: list[Violation]) -> TriageDecision:
@@ -58,11 +84,13 @@ class Orchestrator:
         fixer: FixerAgent,
         critic: CriticAgent,
         verifier: Optional[Verifier] = None,
+        max_parallel_rows: int = MAX_PARALLEL_ROWS,
     ) -> None:
         self._triage = triage
         self._fixer = fixer
         self._critic = critic
         self._verifier = verifier or Verifier()
+        self._max_parallel_rows = max(1, max_parallel_rows)
 
     def run(self, state: PipelineState) -> PipelineState:
         # ── Step 1: Lint ──────────────────────────────────────────────────────
@@ -128,6 +156,11 @@ class Orchestrator:
             state.log("triage", f"Escalated (human-only): {v.rule_id} @ row {v.row_index}")
 
         # ── Step 4: Fix auto-fixable violations ───────────────────────────────
+        # Violations on the SAME row are fixed one after another: each rewrites
+        # the text the next one has to read. Different rows share nothing, so
+        # they run at once — which is where the wall time goes, a file of six
+        # identical CTA fixes being the common case.
+        by_row: dict[int, list[Violation]] = {}
         for ref in decision.fix_order:
             v = _find_violation(state.violations, ref.rule_id, ref.row_index)
             if v is None:
@@ -137,7 +170,37 @@ class Orchestrator:
                     f"{ref.rule_id}@{ref.row_index}",
                 )
                 continue
-            self._fix_violation(state, v)
+            by_row.setdefault(v.row_index, []).append(v)
+
+        if by_row:
+            batch = list(by_row.items())
+            workers = min(self._max_parallel_rows, len(batch))
+            retries = state.max_retries_per_violation
+            state.log(
+                "fix",
+                f"Fixing {sum(len(vs) for _, vs in batch)} violation(s) across "
+                f"{len(batch)} row(s), {workers} row(s) at a time",
+            )
+
+            def fix_one(item: tuple[int, list[Violation]]) -> _RowWork:
+                row_index, violations = item
+                return self._fix_row(state.row(row_index), violations, retries)
+
+            if workers > 1:
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    done = list(pool.map(fix_one, batch))
+            else:
+                done = [fix_one(item) for item in batch]
+
+            # Merged in submission order, not completion order.
+            for (row_index, _), work in zip(batch, done):
+                position = next(
+                    i for i, r in enumerate(state.rows) if r.row_index == row_index
+                )
+                state.rows[position] = work.row
+                state.attempts.extend(work.attempts)
+                state.escalations.extend(work.escalations)
+                state.trace.extend(work.trace)
 
         # ── Step 5: Final full-file re-lint — safety net beyond Gate 1 ────────
         # Gate 1 only re-checks the SAME rule on the patched row. A fix can
@@ -184,11 +247,22 @@ class Orchestrator:
 
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _fix_violation(self, state: PipelineState, violation: Violation) -> None:
+    def _fix_row(
+        self, row: CsvRow, violations: list[Violation], max_retries: int
+    ) -> _RowWork:
+        """Work through one row's violations in order, on a private copy."""
+        work = _RowWork(row=row)
+        for violation in violations:
+            self._fix_violation(work, violation, max_retries)
+        return work
+
+    def _fix_violation(
+        self, work: _RowWork, violation: Violation, max_retries: int
+    ) -> None:
         critic_note: Optional[str] = None
 
-        for attempt in range(1, state.max_retries_per_violation + 1):
-            row = state.row(violation.row_index)
+        for attempt in range(1, max_retries + 1):
+            row = work.row
 
             # ── Fixer ─────────────────────────────────────────────────────────
             try:
@@ -199,10 +273,10 @@ class Orchestrator:
                 # Caught failure: Fixer returned unparseable output (e.g. prose
                 # or broken JSON). Record it, then retry with a corrective note
                 # telling the model to emit bare JSON (point 5).
-                state.log(
+                work.log(
                     "fix",
                     (
-                        f"Attempt {attempt}/{state.max_retries_per_violation}: "
+                        f"Attempt {attempt}/{max_retries}: "
                         f"Fixer output unparseable ({type(exc).__name__}) for "
                         f"{violation.rule_id}@row{violation.row_index} — retrying"
                     ),
@@ -210,7 +284,7 @@ class Orchestrator:
                     row_index=violation.row_index,
                     attempt=attempt,
                 )
-                state.attempts.append(FixAttempt(
+                work.attempts.append(FixAttempt(
                     attempt_number=attempt,
                     rule_id=violation.rule_id,
                     row_index=violation.row_index,
@@ -224,10 +298,10 @@ class Orchestrator:
                     "code fences, nothing else."
                 )
                 continue
-            state.log(
+            work.log(
                 "fix",
                 (
-                    f"Attempt {attempt}/{state.max_retries_per_violation}: "
+                    f"Attempt {attempt}/{max_retries}: "
                     f"{violation.rule_id}@row{violation.row_index} → action={proposal.action}"
                 ),
                 rule_id=violation.rule_id,
@@ -238,8 +312,8 @@ class Orchestrator:
 
             # ── cannot_fix short-circuit ──────────────────────────────────────
             if proposal.action == "cannot_fix":
-                state.escalations.append(violation)
-                state.attempts.append(FixAttempt(
+                work.escalations.append(violation)
+                work.attempts.append(FixAttempt(
                     attempt_number=attempt,
                     rule_id=violation.rule_id,
                     row_index=violation.row_index,
@@ -247,7 +321,7 @@ class Orchestrator:
                     outcome=FixOutcome.ESCALATED,
                     gate_rejection="cannot_fix",
                 ))
-                state.log(
+                work.log(
                     "verify",
                     f"Escalated (cannot_fix): {violation.rule_id}@row{violation.row_index}",
                 )
@@ -257,14 +331,12 @@ class Orchestrator:
             result = self._verifier.verify(row, violation, proposal)
 
             if result.accepted:
-                # Commit the fix
-                idx = next(
-                    i for i, r in enumerate(state.rows)
-                    if r.row_index == violation.row_index
-                )
+                # Commit the fix to this row's private copy — the next
+                # violation on the same row must see it, and the shared state
+                # is not touched until every row is done.
                 assert result.new_row is not None
-                state.rows[idx] = result.new_row
-                state.attempts.append(FixAttempt(
+                work.row = result.new_row
+                work.attempts.append(FixAttempt(
                     attempt_number=attempt,
                     rule_id=violation.rule_id,
                     row_index=violation.row_index,
@@ -273,7 +345,7 @@ class Orchestrator:
                     proposed_media_url=result.new_row.media_url,
                     outcome=FixOutcome.FIXED,
                 ))
-                state.log(
+                work.log(
                     "verify",
                     f"Fix ACCEPTED: {violation.rule_id}@row{violation.row_index} "
                     f"(attempt {attempt})",
@@ -281,12 +353,12 @@ class Orchestrator:
                 return
 
             # ── Fix rejected ──────────────────────────────────────────────────
-            state.log(
+            work.log(
                 "verify",
                 f"Fix REJECTED (attempt {attempt}): {result.gate_failure}",
                 gate_failure=result.gate_failure,
             )
-            state.attempts.append(FixAttempt(
+            work.attempts.append(FixAttempt(
                 attempt_number=attempt,
                 rule_id=violation.rule_id,
                 row_index=violation.row_index,
@@ -298,18 +370,18 @@ class Orchestrator:
 
             # Immediate escalation for lookup_media failures — no point retrying
             if result.escalate:
-                state.escalations.append(violation)
-                state.attempts[-1] = state.attempts[-1].model_copy(
+                work.escalations.append(violation)
+                work.attempts[-1] = work.attempts[-1].model_copy(
                     update={"outcome": FixOutcome.ESCALATED}
                 )
-                state.log(
+                work.log(
                     "verify",
                     f"Escalated (gate said escalate=True): "
                     f"{violation.rule_id}@row{violation.row_index}",
                 )
                 return
 
-            if attempt < state.max_retries_per_violation:
+            if attempt < max_retries:
                 # ── Critic ────────────────────────────────────────────────────
                 try:
                     critic_result = self._critic.critique(
@@ -320,16 +392,16 @@ class Orchestrator:
                         f"{critic_result.explanation} "
                         f"Suggestion: {critic_result.suggestion}"
                     )
-                    state.log("critic", f"Critic note: {critic_note}")
+                    work.log("critic", f"Critic note: {critic_note}")
                     # Attach note to the attempt record for the trace
-                    state.attempts[-1] = state.attempts[-1].model_copy(
+                    work.attempts[-1] = work.attempts[-1].model_copy(
                         update={"critic_note": critic_note}
                     )
                 except ValueError as exc:
                     # Caught failure: Critic output unparseable. Non-critical —
                     # retry the Fixer without a note rather than crash.
                     critic_note = None
-                    state.log(
+                    work.log(
                         "critic",
                         (
                             f"Critic output unparseable ({type(exc).__name__}); "
@@ -338,8 +410,8 @@ class Orchestrator:
                     )
 
         # ── All retries exhausted ─────────────────────────────────────────────
-        state.log(
+        work.log(
             "verify",
-            f"All {state.max_retries_per_violation} attempt(s) exhausted for "
+            f"All {max_retries} attempt(s) exhausted for "
             f"{violation.rule_id}@row{violation.row_index} — UNFIXED",
         )

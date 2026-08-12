@@ -20,7 +20,11 @@ from .state import CsvRow, Platform, Severity, Violation, _extract_hashtags
 # Constants
 # ---------------------------------------------------------------------------
 
+# A date may arrive without a time: the plan's time column is sometimes left
+# empty on purpose, to be scheduled by hand inside Publer. Both shapes pass;
+# anything else is a malformed date.
 _DATE_FORMAT = "%Y/%m/%d %H:%M"
+_DATE_ONLY_FORMAT = "%Y/%m/%d"
 _EXPECTED_COLUMNS = 7
 _TWITTER_MAX_CHARS = 280
 
@@ -75,23 +79,33 @@ def check_column_count(raw_rows: list[list[str]]) -> list[Violation]:
 # ---------------------------------------------------------------------------
 
 def check_date_format(row: CsvRow) -> list[Violation]:
-    """Date must parse as YYYY/MM/DD HH:MM."""
-    try:
-        datetime.strptime(row.date.strip(), _DATE_FORMAT)
-        return []
-    except ValueError:
-        return [Violation(
-            rule_id="date_format",
-            row_index=row.row_index,
-            severity=Severity.ERROR,
-            message=(
-                f"Row {row.row_index}: date {row.date!r} is not in "
-                f"'YYYY/MM/DD HH:MM' format (e.g. '2026/06/24 18:00')."
-            ),
-            # Rewriting a date in an ambiguous wrong format (e.g. "06-24-2026") requires
-            # human judgment — Jan 2 vs Feb 1 cannot be resolved without context.
-            auto_fixable=False,
-        )]
+    """Date must parse as YYYY/MM/DD HH:MM, or as YYYY/MM/DD on its own.
+
+    The time is optional because leaving it out is a real editorial choice —
+    the post is dated but its hour is decided in Publer. The date itself is
+    not optional: without one there is nothing to schedule.
+    """
+    value = row.date.strip()
+    for fmt in (_DATE_FORMAT, _DATE_ONLY_FORMAT):
+        try:
+            datetime.strptime(value, fmt)
+            return []
+        except ValueError:
+            continue
+
+    return [Violation(
+        rule_id="date_format",
+        row_index=row.row_index,
+        severity=Severity.ERROR,
+        message=(
+            f"Row {row.row_index}: date {row.date!r} is not in "
+            f"'YYYY/MM/DD HH:MM' or 'YYYY/MM/DD' format "
+            f"(e.g. '2026/06/24 18:00' or '2026/06/24')."
+        ),
+        # Rewriting a date in an ambiguous wrong format (e.g. "06-24-2026") requires
+        # human judgment — Jan 2 vs Feb 1 cannot be resolved without context.
+        auto_fixable=False,
+    )]
 
 
 # ---------------------------------------------------------------------------

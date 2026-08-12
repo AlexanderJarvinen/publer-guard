@@ -129,57 +129,153 @@ def test_facebook_posts_sliced_from_absolute_columns(stub_open, tmp_path):
 
 
 def fb_post_row(day: int) -> list[_Cell]:
-    """A complete FACEBOOK_OFFICIAL_POSTS row — every mandatory field filled."""
+    """A FACEBOOK_OFFICIAL_POSTS row with nothing to complain about — every
+    mandatory field filled, and hashtags too."""
     r = blank_row()
     put(r, "A", date=dt.date(2026, 8, day))
     put(r, "C", time=(10, 0))
     put(r, "E", text="Post body")
     put(r, "G", text="https://cdn.publer.com/a.jpg")
+    put(r, "H", text="#arcticdreams")
     return r
 
 
-@pytest.mark.parametrize("missing,why", [
-    ("A", "no date"),
-    ("C", "no time"),
-    ("E", "no text"),
-    ("G", "no media"),
+@pytest.mark.parametrize("empty,field", [
+    ("A", "date"),
+    ("C", "time"),
+    ("E", "text"),
+    ("G", "media"),
 ])
-def test_a_row_missing_any_mandatory_field_is_not_a_unit(stub_open, tmp_path, missing, why):
+def test_a_gap_in_a_mandatory_field_warns_without_dropping_the_row(
+    stub_open, tmp_path, empty, field
+):
+    """The gap may be deliberate — a time left for Publer to schedule — so the
+    row still converts, carrying whatever the plan holds."""
     r1 = fb_post_row(12)
-    r1[_col(missing)] = _Cell()
+    r1[_col(empty)] = _Cell()
 
     stub_open([r1])
-    assert slice_plan(tmp_path / "PLAN.ods").files == [], why
+    sliced = slice_plan(tmp_path / "PLAN.ods")
+
+    (plan,) = sliced.files
+    assert len(plan.rows) == 1, field
+    assert for_unit(sliced, "FACEBOOK_OFFICIAL_POSTS").columns == (empty,)
+
+
+def test_what_is_filled_is_what_is_written(stub_open, tmp_path):
+    """No invention: an absent time yields a bare date, not a made-up hour."""
+    r1 = fb_post_row(12)
+    r1[_col("C")] = _Cell()
+
+    stub_open([r1])
+    (plan,) = slice_plan(tmp_path / "PLAN.ods").files
+    assert plan.rows[0].date == "2026/08/12"
+
+
+def test_a_row_with_no_date_at_all_writes_an_empty_date(stub_open, tmp_path):
+    r1 = fb_post_row(12)
+    r1[_col("A")] = _Cell()
+
+    stub_open([r1])
+    (plan,) = slice_plan(tmp_path / "PLAN.ods").files
+    assert plan.rows[0].date == ""
+    assert plan.rows[0].media_url == "https://cdn.publer.com/a.jpg"
 
 
 def test_optional_fields_are_not_required(stub_open, tmp_path):
-    """Hashtags (H) are absent — the post is still a post."""
-    stub_open([fb_post_row(12)])
-    (plan,) = slice_plan(tmp_path / "PLAN.ods").files
+    """Hashtags are optional: without them the row is still a post — it just
+    earns a warning, because leaving them out is usually an oversight."""
+    r1 = fb_post_row(12)
+    r1[_col("H")] = _Cell()
+
+    stub_open([r1])
+    sliced = slice_plan(tmp_path / "PLAN.ods")
+
+    (plan,) = sliced.files
     assert plan.rows[0].text == "Post body"
 
+    (warning,) = sliced.warnings
+    assert warning.kind == "no_hashtags"
+    assert warning.columns == ("H",)
+    assert warning.message() == (
+        f"FACEBOOK_OFFICIAL_POSTS, строка {FIRST_DATA_ROW}: не заполнено поле "
+        "«Hashtags for the post» (H) — пост уйдёт без хэштегов. Пожалуйста, проверьте."
+    )
 
-def test_incomplete_rows_are_dropped_from_a_unit(stub_open, tmp_path):
-    complete_1, incomplete, complete_2 = fb_post_row(12), fb_post_row(13), fb_post_row(14)
-    incomplete[_col("G")] = _Cell()          # media never filled in
 
-    stub_open([complete_1, incomplete, complete_2])
+def test_a_unit_with_no_hashtag_column_never_warns(stub_open, tmp_path):
+    """TELEGRAMM has no hashtags column in the layout at all."""
+    r1 = blank_row()
+    put(r1, "CB", date=dt.date(2026, 8, 12))
+    put(r1, "CD", time=(9, 0))
+    put(r1, "CF", text="Пост на русском")
+    put(r1, "CH", text="https://cdn.publer.com/tg.jpg")
+
+    stub_open([r1])
+    sliced = slice_plan(tmp_path / "PLAN.ods")
+    assert len(sliced.files) == 1
+    assert sliced.warnings == []
+
+
+def test_a_row_with_a_gap_is_not_also_nagged_about_hashtags(stub_open, tmp_path):
+    """One warning per row: the gap is the thing to fix first."""
+    r1 = fb_post_row(12)
+    r1[_col("E")] = _Cell()      # no text
+    r1[_col("H")] = _Cell()      # and no hashtags either
+
+    stub_open([r1])
+    (warning,) = slice_plan(tmp_path / "PLAN.ods").warnings
+    assert warning.kind == "incomplete"
+    assert warning.columns == ("E",)
+
+
+def test_a_unit_started_but_never_finished_still_gets_its_file(stub_open, tmp_path):
+    """FB clips with a media link and nothing else: the author may mean to add
+    the time and description in Publer, so the file has to exist."""
+    r1 = blank_row()
+    put(r1, "A", date=dt.date(2026, 8, 12))
+    put(r1, "L", text="https://cdn.publer.com/clip.mp4")
+
+    stub_open([r1])
+    sliced = slice_plan(tmp_path / "PLAN.ods")
+
+    (plan,) = sliced.files
+    assert plan.unit == "FACEBOOK_OFFICIAL_CLIPS"
+    (row,) = plan.rows
+    assert row.media_url == "https://cdn.publer.com/clip.mp4"
+    assert row.date == "2026/08/12"          # no time was given
+    assert row.text == ""
+    assert plan.unfinished == (FIRST_DATA_ROW,)
+
+
+def test_a_partial_file_records_which_of_its_rows_have_gaps(stub_open, tmp_path):
+    """The CSV looks finished on its own, so it has to carry the shortfall."""
+    good_1, gappy, good_2 = fb_post_row(12), fb_post_row(13), fb_post_row(14)
+    gappy[_col("E")] = _Cell()
+
+    stub_open([good_1, gappy, good_2])
     (plan,) = slice_plan(tmp_path / "PLAN.ods").files
 
-    assert [r.date for r in plan.rows] == ["2026/08/12 10:00", "2026/08/14 10:00"]
-    # row_index is per-file and contiguous, so the orchestrator can address rows.
-    assert [r.row_index for r in plan.rows] == [0, 1]
+    assert len(plan.rows) == 3               # nothing is thrown away
+    assert plan.unfinished == (FIRST_DATA_ROW + 1,)   # the sheet row, 1-based
 
 
-def test_a_units_own_time_column_gates_it(stub_open, tmp_path):
-    """FB clips validate against J, their own time — not C, the post's time."""
+def test_a_file_with_no_gaps_records_none(stub_open, tmp_path):
+    stub_open([fb_post_row(12), fb_post_row(13)])
+    (plan,) = slice_plan(tmp_path / "PLAN.ods").files
+    assert plan.unfinished == ()
+
+
+def test_a_units_own_time_column_feeds_it(stub_open, tmp_path):
+    """FB clips take J, their own time — not C, the post's time."""
     r1 = blank_row()
     put(r1, "A", date=dt.date(2026, 8, 12))
     put(r1, "K", text="Clip body")
     put(r1, "L", text="https://cdn.publer.com/clip.mp4")
     put(r1, "C", time=(11, 0))               # the POST's time is filled in…
     stub_open([r1])
-    assert slice_plan(tmp_path / "PLAN.ods").files == []   # …but the clip's (J) is not
+    (plan,) = slice_plan(tmp_path / "PLAN.ods").files
+    assert plan.rows[0].date == "2026/08/12"   # …and the clip did not borrow it
 
     put(r1, "J", time=(19, 45))
     stub_open([r1])
@@ -188,15 +284,16 @@ def test_a_units_own_time_column_gates_it(stub_open, tmp_path):
     assert plan.rows[0].date == "2026/08/12 19:45"
 
 
-def test_youtube_video_requires_its_title(stub_open, tmp_path):
-    """Title is mandatory for the units that declare one."""
+def test_youtube_video_wants_its_title(stub_open, tmp_path):
+    """Title is mandatory for the units that declare one — a gap warns."""
     r1 = blank_row()
     put(r1, "AZ", date=dt.date(2026, 8, 12))
     put(r1, "BG", time=(16, 0))
     put(r1, "BI", text="Video description")
     put(r1, "BJ", text="https://cdn.publer.com/video.mp4")
     stub_open([r1])
-    assert slice_plan(tmp_path / "PLAN.ods").files == []
+    sliced = slice_plan(tmp_path / "PLAN.ods")
+    assert for_unit(sliced, "YOUTUBE_VIDEO").columns == ("BH",)
 
     put(r1, "BH", text="Video headline")
     stub_open([r1])
@@ -249,7 +346,7 @@ def test_instagram_reels_use_their_own_description(stub_open, tmp_path):
     put(r1, "AA", text="https://cdn.publer.com/reel.mp4")
 
     stub_open([r1])
-    (plan,) = slice_plan(tmp_path / "PLAN.ods").files
+    plan = file_for(slice_plan(tmp_path / "PLAN.ods"), "INSTAGRAMM_OFFICIAL_REELS")
 
     assert plan.name == "PLAN_INSTAGRAMM_OFFICIAL_REELS"
     assert plan.rows[0].text == "Reel description"
@@ -436,60 +533,113 @@ def test_all_mismatches_are_reported_at_once_left_to_right(tmp_path, monkeypatch
 
 
 # ---------------------------------------------------------------------------
-# Skipped-row accounting
+# Unfinished rows — filled in part, not in whole
 # ---------------------------------------------------------------------------
 
-def test_a_skipped_row_names_the_unit_row_and_missing_columns(stub_open, tmp_path):
+def file_for(sliced, unit: str):
+    """The file produced for `unit`. Rows often start several units at once."""
+    (plan,) = [f for f in sliced.files if f.unit == unit]
+    return plan
+
+
+def for_unit(sliced, unit: str):
+    """The one warning raised for `unit`.
+
+    A row usually raises several: the date column is shared by the units in a
+    block, so filling it starts all of them at once.
+    """
+    (warning,) = [w for w in sliced.warnings if w.unit == unit]
+    return warning
+
+
+def test_an_unfinished_row_names_the_unit_row_and_empty_columns(stub_open, tmp_path):
     r1 = fb_post_row(12)
     r1[_col("G")] = _Cell()                  # media left empty
 
     stub_open([blank_row(), r1])
     sliced = slice_plan(tmp_path / "PLAN.ods")
 
-    assert sliced.files == []
-    (skip,) = sliced.skipped
-    assert skip.unit == "FACEBOOK_OFFICIAL_POSTS"
+    assert len(file_for(sliced, "FACEBOOK_OFFICIAL_POSTS").rows) == 1
+    warning = for_unit(sliced, "FACEBOOK_OFFICIAL_POSTS")
+    assert warning.unit == "FACEBOOK_OFFICIAL_POSTS"
     # 1-based, as shown in the sheet: header band, one blank, then this row.
-    assert skip.sheet_row == FIRST_DATA_ROW + 1
-    assert skip.missing == ("media (G)",)
+    assert warning.sheet_row == FIRST_DATA_ROW + 1
+    assert warning.columns == ("G",)
 
 
-def test_every_missing_mandatory_column_is_listed(stub_open, tmp_path):
+def test_every_empty_mandatory_column_is_listed_left_to_right(stub_open, tmp_path):
     r1 = blank_row()
     put(r1, "A", date=dt.date(2026, 8, 12))
     put(r1, "E", text="Post body")           # started, but time and media absent
 
     stub_open([r1])
-    (skip,) = slice_plan(tmp_path / "PLAN.ods").skipped
-    assert skip.missing == ("time (C)", "media (G)")
+    warning = for_unit(slice_plan(tmp_path / "PLAN.ods"), "FACEBOOK_OFFICIAL_POSTS")
+    assert warning.columns == ("C", "G")
 
 
-def test_a_bare_date_does_not_flag_every_unit(stub_open, tmp_path):
-    """A pre-filled calendar column must not report all 12 units as skipped."""
+def test_a_row_with_nothing_filled_is_not_a_warning(stub_open, tmp_path):
+    """Nothing at all in the unit's columns means it wasn't planned that day."""
+    stub_open([blank_row()])
+    assert slice_plan(tmp_path / "PLAN.ods").warnings == []
+
+
+def test_a_date_and_a_time_alone_are_not_a_start(stub_open, tmp_path):
+    """Both are scaffolding: the date column belongs to the whole block, the
+    time column is a formula dragged down every row. Neither says a unit was
+    begun, so a row carrying only those must stay silent."""
     r1 = blank_row()
     put(r1, "A", date=dt.date(2026, 8, 12))
+    put(r1, "C", time=(10, 0))
+    put(r1, "J", time=(19, 45))
     put(r1, "O", date=dt.date(2026, 8, 12))
+    put(r1, "Q", time=(12, 0))
 
     stub_open([r1])
-    assert slice_plan(tmp_path / "PLAN.ods").skipped == []
+    assert slice_plan(tmp_path / "PLAN.ods").warnings == []
 
 
-def test_complete_rows_are_never_reported_as_skipped(stub_open, tmp_path):
+def test_one_cell_of_content_does_start_a_unit(stub_open, tmp_path):
+    """Text, media or a title is what counts — and only that unit is warned."""
+    r1 = blank_row()
+    put(r1, "A", date=dt.date(2026, 8, 12))   # shared by both Facebook units
+    put(r1, "C", time=(10, 0))                # the post's time, filled by formula
+    put(r1, "L", text="https://cdn.publer.com/clip.mp4")   # only the clip was begun
+
+    stub_open([r1])
+    (warning,) = slice_plan(tmp_path / "PLAN.ods").warnings
+    assert warning.unit == "FACEBOOK_OFFICIAL_CLIPS"
+    assert warning.columns == ("J", "K")
+
+
+def test_complete_rows_are_never_warned_about(stub_open, tmp_path):
     stub_open([fb_post_row(12)])
     sliced = slice_plan(tmp_path / "PLAN.ods")
     assert len(sliced.files) == 1
-    assert sliced.skipped == []
+    # FB clips share the date column but nothing of theirs was filled in.
+    assert sliced.warnings == []
 
 
-def test_skips_are_reported_for_units_that_produced_a_file_too(stub_open, tmp_path):
+def test_warnings_are_raised_for_units_that_produced_a_file_too(stub_open, tmp_path):
     good, bad = fb_post_row(12), fb_post_row(13)
     bad[_col("C")] = _Cell()                 # this one loses its time
 
     stub_open([good, bad])
     sliced = slice_plan(tmp_path / "PLAN.ods")
 
-    assert len(sliced.files) == 1 and len(sliced.files[0].rows) == 1
-    assert [s.missing for s in sliced.skipped] == [("time (C)",)]
+    assert len(sliced.files) == 1 and len(sliced.files[0].rows) == 2
+    assert for_unit(sliced, "FACEBOOK_OFFICIAL_POSTS").columns == ("C",)
+
+
+def test_the_warning_reads_as_a_sentence(stub_open, tmp_path):
+    r1 = fb_post_row(12)
+    r1[_col("E")] = _Cell()
+
+    stub_open([r1])
+    warning = for_unit(slice_plan(tmp_path / "PLAN.ods"), "FACEBOOK_OFFICIAL_POSTS")
+    assert warning.message() == (
+        f"FACEBOOK_OFFICIAL_POSTS, строка {FIRST_DATA_ROW}: похоже, не заполнено "
+        "поле «Post text» (E). Пожалуйста, проверьте."
+    )
 
 
 def test_plan_csv_carries_its_unit_suffix(stub_open, tmp_path):
@@ -616,16 +766,19 @@ def write_xlsx(path: Path, sheet_name: str = ingest.CONTENT_SHEET) -> Path:
 
 def test_xlsx_is_read_end_to_end(tmp_path):
     plan = write_xlsx(tmp_path / "AUG2026.xlsx")
-    plans = {p.name: p for p in slice_plan(plan).files}
+    sliced = slice_plan(plan)
+    plans = {p.name: p for p in sliced.files}
 
     assert set(plans) == {"AUG2026_FACEBOOK_OFFICIAL_POSTS", "AUG2026_FACEBOOK_OFFICIAL_CLIPS"}
 
     posts = plans["AUG2026_FACEBOOK_OFFICIAL_POSTS"]
     assert posts.platform is Platform.FACEBOOK
-    # Only the row with media survives — 2026/08/13 had text only.
-    assert [r.date for r in posts.rows] == ["2026/08/12 18:30"]
+    # The 2026/08/13 row has text and nothing else — it converts, with gaps,
+    # and is flagged rather than dropped.
+    assert [r.date for r in posts.rows] == ["2026/08/12 18:30", "2026/08/13"]
     assert posts.rows[0].text == "Post body\n\n#arcticdreams #2084"
     assert posts.rows[0].media_url == "https://cdn.publer.com/uploads/x/cover.jpg"
+    assert posts.unfinished == (6,)
 
     clips = plans["AUG2026_FACEBOOK_OFFICIAL_CLIPS"]
     assert [r.date for r in clips.rows] == ["2026/08/12 21:00"]

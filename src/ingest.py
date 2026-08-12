@@ -7,10 +7,11 @@ shorts. Each unit reads a fixed set of ABSOLUTE spreadsheet columns declared
 in `PLAN_SPECS`; units that share a date (e.g. FB posts and FB clips) each
 have their own time column.
 
-A row is a content unit only when every mandatory field of that unit is
-filled: date, time, media, text — plus the title where the unit has one.
-Hashtags and people tags are optional. A unit with no complete row anywhere
-produces no file at all.
+A row becomes a post as soon as the unit has been started there — any of its
+text, media or title filled in. Whatever is filled goes to the CSV, gaps and
+all: a missing time may well be deliberate, to be scheduled inside Publer.
+The gaps come back as warnings. A unit nobody started anywhere produces no
+file at all.
 
 This is the front of the pipeline's ingestion stage. It is NOT an agent: the
 mapping from spreadsheet columns to CSV columns is a fixed table with a
@@ -29,7 +30,7 @@ import datetime as dt
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import ClassVar, Optional
 
 from .state import CsvRow, Platform
 
@@ -85,9 +86,9 @@ class PlanSpec:
     column is deliberately not listed — it is derivable from the date and
     never reaches the CSV.
 
-    MANDATORY: `date`, `time`, `media` and `text` — a row missing any of them
-    is not a content unit and is skipped (see `slice_plan`). `title` is
-    mandatory too for the units that declare one (YouTube video / shorts).
+    MANDATORY: `date`, `time`, `media` and `text`, plus `title` for the units
+    that declare one (YouTube video / shorts). "Mandatory" means a gap is
+    worth a warning, not that the row is thrown away — see `slice_plan`.
 
     OPTIONAL: `hashtags` and `people` — a post without them is still a post.
     Both are concatenated onto the text, in the order text → hashtags →
@@ -610,6 +611,10 @@ class PlanCsv:
     platform: Platform
     unit: str = ""       # the PlanSpec suffix this came from, e.g. "TIKTOK"
     rows: list[CsvRow] = field(default_factory=list)
+    # Sheet rows that made it into the file with gaps still in them. Carried
+    # on the file itself so a half-finished CSV can say so where it is
+    # downloaded — a warning elsewhere on the page is easy to import past.
+    unfinished: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -678,23 +683,66 @@ def _shown_label(labels: list[str]) -> str:
 
 
 @dataclass(frozen=True)
-class SkippedRow:
-    """A half-filled plan row that could not become a content unit.
+class PlanWarning:
+    """Something about one plan row worth telling the author.
 
-    Dropping these silently is what makes a missing output file baffling, so
-    ingestion reports them: `missing` names the mandatory fields that were
-    empty, each with its column letter, so the gap is findable in the sheet.
+    Advisory only — nothing here stops a file from being written. The two
+    kinds below differ in what they cost: an unfinished row reaches Publer
+    with holes in it, while a post with no hashtags is complete but bare.
     """
+    kind: ClassVar[str] = "warning"
+
     unit: str                   # the unit's file suffix
     sheet_row: int              # 1-based row number, as shown in the spreadsheet
-    missing: tuple[str, ...]    # e.g. ("time (C)", "media (G)")
+    columns: tuple[str, ...]    # the cells at issue, left to right
+
+    def labelled(self) -> list[str]:
+        """The cells named as the sheet names them: «Post text» (E)."""
+        return [f"«{EXPECTED_HEADERS.get(c, c)}» ({c})" for c in self.columns]
+
+    def message(self) -> str:
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class IncompleteRow(PlanWarning):
+    """Some mandatory fields are filled and others aren't.
+
+    The row is still converted — the gap may be deliberate, to be filled in
+    inside Publer — so this never blocks anything. It exists because the other
+    case, someone who got interrupted, looks exactly the same from here and is
+    far more common.
+    """
+    kind: ClassVar[str] = "incomplete"
+
+    def message(self) -> str:
+        one = len(self.columns) == 1
+        return (f"{self.unit}, строка {self.sheet_row}: похоже, "
+                f"{'не заполнено поле' if one else 'не заполнены поля'} "
+                f"{', '.join(self.labelled())}. Пожалуйста, проверьте.")
+
+
+@dataclass(frozen=True)
+class MissingHashtags(PlanWarning):
+    """A complete post whose hashtag cell is empty.
+
+    Hashtags are optional — the row converts and publishes either way — so
+    this never blocks anything. It is here because leaving them out is far
+    more often an oversight than a decision.
+    """
+    kind: ClassVar[str] = "no_hashtags"
+
+    def message(self) -> str:
+        return (f"{self.unit}, строка {self.sheet_row}: не заполнено поле "
+                f"{', '.join(self.labelled())} — пост уйдёт без хэштегов. "
+                f"Пожалуйста, проверьте.")
 
 
 @dataclass
 class PlanSlices:
     """Everything one pass over a content plan produced."""
     files: list[PlanCsv] = field(default_factory=list)
-    skipped: list[SkippedRow] = field(default_factory=list)
+    warnings: list[PlanWarning] = field(default_factory=list)
 
 
 def _safe_name(label: str) -> str:
@@ -721,22 +769,33 @@ def _combine_text(*parts: str) -> str:
     return "\n\n".join(p.strip() for p in parts if p and p.strip())
 
 
-def _build_date(d: dt.date, hm: tuple[int, int]) -> str:
-    h, m = hm
-    return f"{d:%Y/%m/%d} {h:02d}:{m:02d}"
+def _build_date(d: Optional[dt.date], hm: Optional[tuple[int, int]]) -> str:
+    """Whatever of the date is filled in — nothing is invented.
+
+    A row can reach the CSV with no time on purpose: the author may mean to
+    schedule it inside Publer. Half a date is what the plan says, so half a
+    date is what gets written.
+    """
+    if d is None:
+        return ""
+    if hm is None:
+        return f"{d:%Y/%m/%d}"
+    return f"{d:%Y/%m/%d} {hm[0]:02d}:{hm[1]:02d}"
 
 
 def slice_plan(path: Path, source_name: Optional[str] = None) -> PlanSlices:
     """Read a content-plan spreadsheet into one CSV per content unit.
 
-    Raises `PlanLayoutError` before converting anything if the sheet is missing
-    columns the layout maps.
+    Raises `PlanLayoutError` before converting anything if the sheet's layout
+    isn't the template's.
 
     A row is a content unit only when **every** mandatory field of that unit is
     filled — date, time, media, text, and the title where the unit has one.
-    Miss any of them and the row is skipped; a unit with no complete row at all
-    produces no file. Half-filled rows come back in `.skipped` so a missing
-    file can be explained instead of just noticed.
+    A row with no content of its own — no text, media or title — means the
+    unit wasn't planned that day and is passed over quietly; the date and time
+    columns don't count, both being scaffolding filled in a month ahead.
+    Everything else is converted with whatever it holds, and its gaps come
+    back in `.warnings`, as does a finished post with no hashtags.
 
     `source_name` is the plan's original file name — it prefixes every output
     file. Pass it explicitly when `path` is a temp copy of an upload.
@@ -760,6 +819,7 @@ def slice_plan(path: Path, source_name: Optional[str] = None) -> PlanSlices:
         time_col = _col(spec.time)
 
         rows: list[CsvRow] = []
+        unfinished: list[int] = []
         # Start below the header band: its labels sit in the text columns, so
         # scanning it would report every header row as a half-filled post.
         for r in range(HEADER_ROWS, grid.nrows):
@@ -768,48 +828,62 @@ def slice_plan(path: Path, source_name: Optional[str] = None) -> PlanSlices:
             media = get(r, spec.media).strip()
             text = get(r, spec.text).strip()
             title = get(r, spec.title).strip()
+            hashtags = get(r, spec.hashtags).strip()
 
-            # All-or-nothing: a half-filled row is not a content unit. Hashtags
-            # and people tags are the only optional fields.
-            missing = []
-            if date is None:
-                missing.append(f"date ({spec.date})")
-            if time is None:
-                missing.append(f"time ({spec.time})")
-            if not text:
-                missing.append(f"text ({spec.text})")
-            if not has_media(media):
-                missing.append(f"media ({spec.media})")
-            if spec.title and not title:
-                missing.append(f"title ({spec.title})")
+            # Hashtags and people tags are the only optional fields; the rest
+            # are all needed before the row can be a post.
+            mandatory = [
+                (spec.date, date is not None),
+                (spec.time, time is not None),
+                (spec.text, bool(text)),
+                (spec.media, has_media(media)),
+            ]
+            if spec.title:
+                mandatory.append((spec.title, bool(title)))
+            mandatory.sort(key=lambda pair: _col(pair[0]))
+            missing = tuple(column for column, filled in mandatory if not filled)
 
-            if not missing:
-                rows.append(CsvRow(
-                    row_index=len(rows),
-                    platform=spec.platform,
-                    date=_build_date(date, time),
-                    text=_combine_text(text, get(r, spec.hashtags), get(r, spec.people)),
-                    link="",
-                    media_url=media,
-                    title=title,
-                    label=spec.suffix,
-                ))
+            # Has this unit been started at all? Date and time don't count:
+            # both are scaffolding laid down a month ahead — the date shared by
+            # the whole block, the time a formula dragged down the column — so
+            # neither says anything about this unit. A row carrying only those
+            # is a day nobody has planned, and it is passed over in silence.
+            started = any(filled for column, filled in mandatory
+                          if column not in (spec.date, spec.time))
+            if not started:
                 continue
 
-            # Only report rows the author actually started. The date column is
-            # shared by every unit in a block, so a date alone doesn't mean
-            # this unit was begun — otherwise a pre-filled calendar column
-            # would flag every unit on every day.
-            if time is not None or text or media or title:
-                out.skipped.append(SkippedRow(spec.suffix, r + 1, tuple(missing)))
+            # Whatever is filled goes in, gaps and all. A missing time may be
+            # deliberate — scheduled later inside Publer — so ingestion doesn't
+            # get to decide the row isn't wanted.
+            rows.append(CsvRow(
+                row_index=len(rows),
+                platform=spec.platform,
+                date=_build_date(date, time),
+                text=_combine_text(text, hashtags, get(r, spec.people)),
+                link="",
+                media_url=media,
+                title=title,
+                label=spec.suffix,
+            ))
 
-        # Not one complete row -> the file is not created.
+            if missing:
+                out.warnings.append(IncompleteRow(spec.suffix, r + 1, missing))
+                unfinished.append(r + 1)
+            elif spec.hashtags and not hashtags:
+                # Nothing wrong with the post; it just has no hashtags.
+                out.warnings.append(
+                    MissingHashtags(spec.suffix, r + 1, (spec.hashtags,))
+                )
+
+        # Not one started row -> the unit wasn't planned, so no file.
         if rows:
             out.files.append(PlanCsv(
                 name=f"{stem}_{spec.suffix}",
                 platform=spec.platform,
                 unit=spec.suffix,
                 rows=rows,
+                unfinished=tuple(unfinished),
             ))
 
     return out
