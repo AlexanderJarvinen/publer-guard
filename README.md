@@ -42,6 +42,35 @@ to Publer.
 
 ---
 
+## Setup
+
+Python 3.9+.
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate         # Windows — source .venv/bin/activate elsewhere
+pip install -r requirements.txt
+
+cp .env.example .env           # then add your ANTHROPIC_API_KEY
+```
+
+Two entry points over the same pipeline:
+
+```bash
+python -m src.app                               # web UI at http://localhost:5000
+python -m src.cli INPUT.csv --platform twitter  # writes _fixed.csv, _report.json, _trace.json
+```
+
+Neither the test suite nor the eval harness needs an API key — both run against
+a fake LLM client, so a fresh clone can verify the whole pipeline offline:
+
+```bash
+pytest                  # 242 tests
+python -m eval.runner   # 6 known cases; prints the first-attempt fix rate
+```
+
+---
+
 ## Why this problem
 
 When you bulk-schedule posts through Publer via CSV, a handful of
