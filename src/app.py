@@ -10,12 +10,15 @@ Opens at http://localhost:5000
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import io
 import json
+import os
 import tempfile
 import zipfile
 from collections import Counter
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 from flask import (
@@ -54,7 +57,62 @@ from .verifier import Verifier
 
 app = Flask(__name__, template_folder=str(Path(__file__).parent.parent / "templates"))
 
+# Content plans are small spreadsheets; anything bigger than this is not a
+# plan. Keeps a public deploy from accepting arbitrary-size uploads.
+app.config["MAX_CONTENT_LENGTH"] = int(
+    os.environ.get("MAX_UPLOAD_MB", "16")
+) * 1024 * 1024
+
 _OUTPUT_DIR = Path(__file__).parent.parent / "output"
+
+# Public-demo guard: pipeline runs per calendar day, because every run with
+# violations spends real API money. 0 (the default) means unlimited — local
+# use stays unthrottled; the deploy sets RUN_LIMIT_PER_DAY explicitly.
+# In-memory on purpose: the demo runs as a single process, and the worst
+# case after a restart is one extra day's quota.
+_RUN_LIMIT_PER_DAY = int(os.environ.get("RUN_LIMIT_PER_DAY", "0"))
+
+
+@dataclass
+class _RunQuota:
+    date: dt.date
+    count: int
+
+
+_run_counter = _RunQuota(date=dt.date.today(), count=0)
+
+
+def _quota_exhausted() -> str | None:
+    """The limit message when the day's quota is spent, else None.
+
+    Read-only: a request that fails validation must not burn quota, so the
+    routes check here first and call _count_run() only once real pipeline
+    work is about to start.
+    """
+    if _RUN_LIMIT_PER_DAY <= 0:
+        return None
+    today = dt.date.today()
+    if _run_counter.date != today:
+        _run_counter.date = today
+        _run_counter.count = 0
+    if _run_counter.count >= _RUN_LIMIT_PER_DAY:
+        return (
+            "Daily demo limit reached — this public instance allows "
+            f"{_RUN_LIMIT_PER_DAY} pipeline runs per day. Try again tomorrow, "
+            "or clone the repo and run it with your own API key."
+        )
+    return None
+
+
+def _count_run() -> None:
+    """Spend one unit of the day's quota (call after validation passes)."""
+    _run_counter.count += 1
+
+
+@app.errorhandler(413)
+def _too_large(_exc: Exception) -> tuple[Response, int]:
+    limit_mb = app.config["MAX_CONTENT_LENGTH"] // (1024 * 1024)
+    return jsonify({"error": f"File too large — the limit is {limit_mb} MB."}), 413
 
 
 def _unique_output_path(name: str) -> Path:
@@ -289,6 +347,10 @@ def _merge_reports(reports: list[dict]) -> dict:
 @app.route("/run", methods=["POST"])
 def run() -> Response | tuple[Response, int]:
     """Validate and repair one or more uploaded CSVs; return a merged report."""
+    limit_msg = _quota_exhausted()
+    if limit_msg:
+        return jsonify({"error": limit_msg}), 429
+
     files = request.files.getlist("files")
     platforms = request.form.getlist("platforms")
     files = [f for f in files if f and f.filename]
@@ -306,6 +368,7 @@ def run() -> Response | tuple[Response, int]:
         return jsonify({"error": "Only .csv files are accepted: " + ", ".join(non_csv)}), 400
 
     max_retries = int(request.form.get("max_retries", 2))
+    _count_run()
 
     try:
         reports = []
@@ -330,6 +393,10 @@ def run() -> Response | tuple[Response, int]:
 def run_plan() -> Response | tuple[Response, int]:
     """Ingest a spreadsheet content plan: slice it into per-unit CSVs,
     run each through the pipeline, and return one merged report."""
+    limit_msg = _quota_exhausted()
+    if limit_msg:
+        return jsonify({"error": limit_msg}), 429
+
     uploaded = request.files.get("file")
     if not uploaded or not uploaded.filename:
         return jsonify({"error": "No plan file selected"}), 400
@@ -363,6 +430,7 @@ def run_plan() -> Response | tuple[Response, int]:
         # upload here keeps the cleanup out of the streaming generator, which
         # outlives this function.
         tmp_path.unlink(missing_ok=True)
+        _count_run()
 
         # A plan with real violations in it takes a minute of model round
         # trips. Streaming a line per file turns that from a hung browser tab
@@ -460,4 +528,9 @@ def download_all() -> Response | tuple[Response, int]:
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    # Debug stays opt-in: the Werkzeug debugger must never face the internet.
+    app.run(
+        debug=os.environ.get("FLASK_DEBUG") == "1",
+        host=os.environ.get("HOST", "127.0.0.1"),
+        port=int(os.environ.get("PORT", "5000")),
+    )
