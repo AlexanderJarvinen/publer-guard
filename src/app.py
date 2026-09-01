@@ -55,6 +55,18 @@ app = Flask(__name__, template_folder=str(Path(__file__).parent.parent / "templa
 _OUTPUT_DIR = Path(__file__).parent.parent / "output"
 
 
+def _unique_output_path(name: str) -> Path:
+    """A path in output/ that will not silently overwrite an earlier run:
+    same-named plans get a ' (2)', ' (3)', … suffix instead."""
+    candidate = _OUTPUT_DIR / name
+    stem, suffix = candidate.stem, candidate.suffix
+    counter = 2
+    while candidate.exists():
+        candidate = _OUTPUT_DIR / f"{stem} ({counter}){suffix}"
+        counter += 1
+    return candidate
+
+
 @app.route("/")
 def index():
     platforms = [p.value for p in Platform]
@@ -78,13 +90,16 @@ def _run_one(uploaded, platform: Platform, max_retries: int) -> dict:
             critic=CriticAgent(client),
             verifier=Verifier(),
         )
-        state = PipelineState(rows=csv_rows, max_retries_per_violation=max_retries)
+        state = PipelineState(
+            rows=csv_rows, raw_rows=raw_rows, max_retries_per_violation=max_retries
+        )
         state = orch.run(state)
 
         _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         stem = Path(uploaded.filename).stem
-        fixed_name = f"{stem}_fixed.csv"
-        write_fixed_csv(_OUTPUT_DIR / fixed_name, header, state.rows)
+        fixed_path = _unique_output_path(f"{stem}_fixed.csv")
+        fixed_name = fixed_path.name
+        write_fixed_csv(fixed_path, state.rows, raw_rows)
 
         report = build_report(state)
         report["fixed_csv"] = fixed_name
@@ -117,8 +132,9 @@ def _run_plan_file(plan, max_retries: int) -> dict:
     state = orch.run(state)
 
     _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    fixed_name = f"{plan.name}_fixed.csv"
-    with (_OUTPUT_DIR / fixed_name).open("w", newline="", encoding="utf-8-sig") as f:
+    fixed_path = _unique_output_path(f"{plan.name}_fixed.csv")
+    fixed_name = fixed_path.name
+    with fixed_path.open("w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
         writer.writerow(PUBLER_HEADER)
         for row in state.rows:

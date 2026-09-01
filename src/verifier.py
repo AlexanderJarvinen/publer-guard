@@ -17,13 +17,8 @@ from typing import Callable, Optional
 from pydantic import BaseModel
 
 from .agents import FixProposal
-from .linter import (
-    _CTA_HANDLE,
-    _REQUIRED_2084_HASHTAGS,
-    _is_2084_row,
-    lint_row,
-)
-from .state import CsvRow, Violation, _extract_hashtags
+from .linter import _CTA_HANDLE, lint_row
+from .state import CsvRow, Violation
 
 
 class VerifierResult(BaseModel):
@@ -135,21 +130,30 @@ class Verifier:
     def _check_gate2(
         original: CsvRow, fixed: CsvRow, violation: Violation
     ) -> Optional[str]:
-        """Required content must not silently disappear."""
+        """
+        Required content must not silently disappear.
+
+        Compares CsvRow.content_fingerprint() before/after — the mechanism
+        the spec designates for this gate. A fix that shortens a Twitter
+        post and drops hashtags in the process is caught here mechanically,
+        on every row, not just series rows.
+        """
+        before = original.content_fingerprint()
+        after = fixed.content_fingerprint()
+
         # 2a. Media must still be present if it was before.
-        if original.media_url and not fixed.media_url:
+        if before["has_media"] and not after["has_media"]:
             return "Gate 2: content_preservation — media_url was removed by the fix"
 
-        # 2b. Required 2084 hashtags that were present before must remain present
-        #     (skip if fixing hashtags_2084 itself — the fixer is expected to add them).
-        if _is_2084_row(original) and violation.rule_id != "hashtags_2084":
-            original_tags = {h.lower() for h in _extract_hashtags(original.text)}
-            fixed_tags = {h.lower() for h in _extract_hashtags(fixed.text)}
-            originally_present = _REQUIRED_2084_HASHTAGS & original_tags
-            removed = originally_present - fixed_tags
+        # 2b. Every hashtag present before must survive the fix (fixing
+        #     hashtags_2084 itself is exempt — that fixer ADDS hashtags).
+        if violation.rule_id != "hashtags_2084":
+            before_tags = {h.lower() for h in before["hashtags"]}
+            after_tags = {h.lower() for h in after["hashtags"]}
+            removed = before_tags - after_tags
             if removed:
                 return (
-                    f"Gate 2: content_preservation — required 2084 hashtags removed by fix: "
+                    f"Gate 2: content_preservation — hashtags removed by fix: "
                     f"{', '.join(sorted(removed))}"
                 )
 

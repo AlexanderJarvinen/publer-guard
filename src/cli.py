@@ -20,8 +20,10 @@ import csv
 import json
 import sys
 from pathlib import Path
+from typing import Optional
 
 from .agents import AnthropicClient, CriticAgent, FixerAgent, TriageAgent
+from .ingest import PUBLER_HEADER
 from .orchestrator import Orchestrator
 from .state import CsvRow, FixOutcome, Platform, PipelineState
 from .verifier import Verifier
@@ -46,35 +48,48 @@ def parse_csv(
         csv_rows: list[CsvRow] = []
         for idx, fields in enumerate(reader):
             raw_rows.append(fields)
-            # Publer export format (7 columns):
-            #   0: Scheduled Date  1: Type  2: Text  3: Media URL
-            #   4: Hashtags        5: Tagged Users   6: Title (used as label)
-            # Pad to 7 fields; column_count violations are caught by the linter.
-            padded = (fields + [""] * 7)[:7]
-            text = padded[2].strip()
-            hashtags = padded[4].strip()
-            if hashtags:
-                text = text + "\n\n" + hashtags
+            # Canonical format — the Publer 12-column bulk-import template
+            # (ingest.PUBLER_HEADER). The first six columns carry the data:
+            #   0: Date  1: Text  2: Link(s)  3: Media URL(s)
+            #   4: Title 5: Label(s)          6-11: optional (passed through)
+            # Pad for mapping; column_count violations come from the linter,
+            # which sees the unpadded raw_rows.
+            padded = (fields + [""] * 12)[:12]
             csv_rows.append(CsvRow(
                 row_index=idx,
                 platform=platform,
                 date=padded[0].strip(),
-                text=text,
-                link="",          # no Link column in this format
+                text=padded[1].strip(),
+                link=padded[2].strip(),
                 media_url=padded[3].strip(),
-                title=padded[1].strip(),   # Type field (Photo / Video / …)
-                label=padded[6].strip(),   # Title field → used for series detection
+                title=padded[4].strip(),
+                label=padded[5].strip(),
             ))
     return header, raw_rows, csv_rows
 
 
-def write_fixed_csv(path: Path, header: list[str], rows: list[CsvRow]) -> None:
-    with path.open("w", newline="", encoding="utf-8") as f:
+def write_fixed_csv(
+    path: Path,
+    rows: list[CsvRow],
+    raw_rows: Optional[list[list[str]]] = None,
+) -> None:
+    """
+    Write rows back in the canonical 12-column Publer template.
+
+    The six data columns come from the (possibly fixed) CsvRows; columns
+    7-12 (Alt text, Comments, …) are passed through untouched from the
+    input's raw lines so a fix never destroys what it didn't inspect.
+    """
+    raw_rows = raw_rows or []
+    with path.open("w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
-        writer.writerow(header)
-        for row in rows:
+        writer.writerow(PUBLER_HEADER)
+        for i, row in enumerate(rows):
+            raw = raw_rows[i] if i < len(raw_rows) else []
+            extras = ((raw + [""] * 12)[:12])[6:]
             writer.writerow([
-                row.date, row.text, row.link, row.media_url, row.title, row.label
+                row.date, row.text, row.link, row.media_url, row.title, row.label,
+                *extras,
             ])
 
 
@@ -265,6 +280,7 @@ def main() -> None:
     )
     state = PipelineState(
         rows=csv_rows,
+        raw_rows=raw_rows,
         max_retries_per_violation=args.max_retries,
     )
 
@@ -276,7 +292,7 @@ def main() -> None:
     report_path = output_dir / f"{stem}_report.json"
     trace_path = output_dir / f"{stem}_trace.json"
 
-    write_fixed_csv(fixed_path, header, state.rows)
+    write_fixed_csv(fixed_path, state.rows, raw_rows)
     report = build_report(state)
     report_path.write_text(
         json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"

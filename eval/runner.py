@@ -1,7 +1,7 @@
 """
 eval/runner.py — deterministic eval harness for publer-guard.
 
-Runs 6 known CSV cases through the full pipeline using FakeLLMClient.
+Runs 7 known CSV cases through the full pipeline using FakeLLMClient.
 No API calls, no cost, fully reproducible.
 
 Outputs:
@@ -15,7 +15,6 @@ Run from the project root:
 
 from __future__ import annotations
 
-import csv
 import json
 import sys
 from dataclasses import dataclass
@@ -26,8 +25,9 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.agents import CriticAgent, FakeLLMClient, FixerAgent, TriageAgent
+from src.cli import parse_csv
 from src.orchestrator import Orchestrator
-from src.state import CsvRow, FixOutcome, Platform, PipelineState
+from src.state import FixOutcome, Platform, PipelineState
 from src.verifier import Verifier
 
 EVAL_DIR = Path(__file__).parent
@@ -44,30 +44,11 @@ _CDN_2084 = (
 # CSV loader (no platform column — all rows share one platform)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _load_csv(name: str, platform: Platform) -> list[CsvRow]:
-    """Load 7-column Publer export CSV: Scheduled Date, Type, Text, Media URL, Hashtags, Tagged Users, Title."""
-    path = EVAL_DIR / name
-    rows: list[CsvRow] = []
-    with path.open(encoding="utf-8-sig") as f:
-        reader = csv.reader(f)
-        next(reader)  # skip header
-        for idx, fields in enumerate(reader):
-            padded = (fields + [""] * 7)[:7]
-            text = padded[2].strip()
-            hashtags = padded[4].strip()
-            if hashtags:
-                text = text + "\n\n" + hashtags
-            rows.append(CsvRow(
-                row_index=idx,
-                platform=platform,
-                date=padded[0].strip(),
-                text=text,
-                link="",
-                media_url=padded[3].strip(),
-                title=padded[1].strip(),
-                label=padded[6].strip(),
-            ))
-    return rows
+def _load_state(name: str, platform: Platform, **kwargs) -> PipelineState:
+    """Load a canonical 12-column Publer-template CSV through the production
+    parser — the eval exercises the same code path as the CLI and web app."""
+    _header, raw_rows, rows = parse_csv(EVAL_DIR / name, platform)
+    return PipelineState(rows=rows, raw_rows=raw_rows, **kwargs)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -167,14 +148,13 @@ def _critic_resp(explanation: str = "Fix failed.", suggestion: str = "Try again.
 # ── Case 01: clean CSV — no violations, no LLM calls ─────────────────────────
 
 def case_01_clean() -> tuple[PipelineState, Expectation]:
-    rows = _load_csv("01_clean.csv", Platform.TWITTER)
     fake = FakeLLMClient([])  # no calls expected
     orch = Orchestrator(
         triage=TriageAgent(fake),
         fixer=FixerAgent(fake),
         critic=CriticAgent(fake),
     )
-    state = orch.run(PipelineState(rows=rows))
+    state = orch.run(_load_state("01_clean.csv", Platform.TWITTER))
     exp = Expectation(
         total_violations=0,
         fixed=0, escalated=0, unfixed=0,
@@ -183,10 +163,43 @@ def case_01_clean() -> tuple[PipelineState, Expectation]:
     return state, exp
 
 
-# ── Case 02: no_cyrillic — Russian text on Facebook, fixed first try ─────────
+# ── Case 02a: link_empty — non-empty Link column cleared first try ───────────
+#
+# The original Publer bug this project exists for: a URL in the Link column
+# triggers "Invalid URL attached" on import. The only legal fix is clearing it.
+
+def case_02_link_clear() -> tuple[PipelineState, Expectation]:
+    llm_responses = [
+        _triage_resp(fix_order=[{"rule_id": "link_empty", "row_index": 0}]),
+        json.dumps({
+            "action": "clear_link",
+            "new_text": None,
+            "lookup_hint": None,
+            "reason": "Link column must be empty; clearing it.",
+        }),
+    ]
+    fake = FakeLLMClient(llm_responses)
+    orch = Orchestrator(
+        triage=TriageAgent(fake),
+        fixer=FixerAgent(fake),
+        critic=CriticAgent(fake),
+    )
+    state = orch.run(_load_state("02_link_clear.csv", Platform.FACEBOOK))
+
+    fixed_row = state.row(0)
+    assert fixed_row.link == "", f"Expected cleared link, got {fixed_row.link!r}"
+
+    exp = Expectation(
+        total_violations=1,
+        fixed=1, escalated=0, unfixed=0,
+        first_attempt_fixed=1,
+    )
+    return state, exp
+
+
+# ── Case 02b: no_cyrillic — Russian text on Facebook, fixed first try ────────
 
 def case_02_no_cyrillic() -> tuple[PipelineState, Expectation]:
-    rows = _load_csv("02_no_cyrillic.csv", Platform.FACEBOOK)
     transliterated = (
         "Novaya glava uzhe vyshla. IG: instagram.com/alex_y_yarvinen\n\n#metal"
     )
@@ -200,7 +213,7 @@ def case_02_no_cyrillic() -> tuple[PipelineState, Expectation]:
         fixer=FixerAgent(fake),
         critic=CriticAgent(fake),
     )
-    state = orch.run(PipelineState(rows=rows))
+    state = orch.run(_load_state("02_no_cyrillic.csv", Platform.FACEBOOK))
     exp = Expectation(
         total_violations=1,
         fixed=1, escalated=0, unfixed=0,
@@ -212,7 +225,6 @@ def case_02_no_cyrillic() -> tuple[PipelineState, Expectation]:
 # ── Case 03: media_url_permanent — resolved via lookup_media ─────────────────
 
 def case_03_tmp_url_found() -> tuple[PipelineState, Expectation]:
-    rows = _load_csv("03_tmp_url_found.csv", Platform.FACEBOOK)
     llm_responses = [
         _triage_resp(fix_order=[{"rule_id": "media_url_permanent", "row_index": 0}]),
         _fixer_lookup_media("2084_part2_room101"),
@@ -223,7 +235,7 @@ def case_03_tmp_url_found() -> tuple[PipelineState, Expectation]:
         fixer=FixerAgent(fake),
         critic=CriticAgent(fake),
     )
-    state = orch.run(PipelineState(rows=rows))
+    state = orch.run(_load_state("03_tmp_url_found.csv", Platform.FACEBOOK))
 
     # Also verify the permanent URL was correctly applied
     fixed_row = state.row(0)
@@ -242,7 +254,6 @@ def case_03_tmp_url_found() -> tuple[PipelineState, Expectation]:
 # ── Case 04: twitter_length — fixed first try ────────────────────────────────
 
 def case_04_twitter_length() -> tuple[PipelineState, Expectation]:
-    rows = _load_csv("04_twitter_length.csv", Platform.TWITTER)
     shortened = (
         "New 2084 chapter is out — the frozen tundra echoes with machinery and ice. "
         "Room 101 awaits. Two plus two never equals four. Descend with us. "
@@ -260,7 +271,7 @@ def case_04_twitter_length() -> tuple[PipelineState, Expectation]:
         fixer=FixerAgent(fake),
         critic=CriticAgent(fake),
     )
-    state = orch.run(PipelineState(rows=rows))
+    state = orch.run(_load_state("04_twitter_length.csv", Platform.TWITTER))
     exp = Expectation(
         total_violations=1,
         fixed=1, escalated=0, unfixed=0,
@@ -277,8 +288,6 @@ def case_04_twitter_length() -> tuple[PipelineState, Expectation]:
 #   Attempt 2: Fixer adds hashtags AND keeps CTA → accepted
 
 def case_05_hashtags_critic() -> tuple[PipelineState, Expectation]:
-    rows = _load_csv("05_hashtags_critic.csv", Platform.FACEBOOK)
-
     # Attempt 1: Fixer drops the CTA to keep text short — Gate 2 will reject
     bad_fix = f"New 2084 chapter. Room 101 awaits. {_ALL_2084_TAGS}"
     # Attempt 2: Fixer keeps CTA — accepted
@@ -312,7 +321,10 @@ def case_05_hashtags_critic() -> tuple[PipelineState, Expectation]:
         fixer=FixerAgent(fake),
         critic=CriticAgent(fake),
     )
-    state = orch.run(PipelineState(rows=rows, max_retries_per_violation=2))
+    state = orch.run(
+        _load_state("05_hashtags_critic.csv", Platform.FACEBOOK,
+                    max_retries_per_violation=2)
+    )
     exp = Expectation(
         total_violations=1,
         fixed=1, escalated=0, unfixed=0,
@@ -324,7 +336,6 @@ def case_05_hashtags_critic() -> tuple[PipelineState, Expectation]:
 # ── Case 06: lookup_media returns None — escalated to human ──────────────────
 
 def case_06_lookup_not_found() -> tuple[PipelineState, Expectation]:
-    rows = _load_csv("06_lookup_not_found.csv", Platform.FACEBOOK)
     llm_responses = [
         _triage_resp(fix_order=[{"rule_id": "media_url_permanent", "row_index": 0}]),
         _fixer_lookup_media("completely_unknown_video_xyz"),
@@ -335,7 +346,7 @@ def case_06_lookup_not_found() -> tuple[PipelineState, Expectation]:
         fixer=FixerAgent(fake),
         critic=CriticAgent(fake),
     )
-    state = orch.run(PipelineState(rows=rows))
+    state = orch.run(_load_state("06_lookup_not_found.csv", Platform.FACEBOOK))
     exp = Expectation(
         total_violations=1,
         fixed=0, escalated=1, unfixed=0,
@@ -350,6 +361,7 @@ def case_06_lookup_not_found() -> tuple[PipelineState, Expectation]:
 
 CASES = [
     ("01_clean",              case_01_clean,         "0 violations - clean pass"),
+    ("02_link_clear",         case_02_link_clear,    "link_empty cleared first try"),
     ("02_no_cyrillic",        case_02_no_cyrillic,   "no_cyrillic fixed first try"),
     ("03_tmp_url_found",      case_03_tmp_url_found, "media_url_permanent fixed via lookup_media"),
     ("04_twitter_length",     case_04_twitter_length,"twitter_length fixed first try"),

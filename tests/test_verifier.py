@@ -321,8 +321,10 @@ class TestGate2:
         )
         assert result.accepted
 
-    def test_non_2084_row_has_no_hashtag_preservation_check(self):
-        # Gate 2 only checks 2084 hashtags if the row has label containing "2084".
+    def test_non_2084_row_hashtag_removal_is_rejected(self):
+        # Gate 2 compares content_fingerprint() before/after: hashtags are
+        # protected on EVERY row, not just 2084-series rows. Shortening a
+        # Twitter post must not silently drop them.
         result = Verifier().verify(
             _row(
                 platform=Platform.TWITTER,
@@ -336,7 +338,23 @@ class TestGate2:
                 reason="removed hashtags to shorten; non-2084 row",
             ),
         )
-        # No CTA in original text → Gate 2 should pass
+        assert not result.accepted
+        assert "hashtags removed" in result.gate_failure
+
+    def test_non_2084_row_fix_keeping_hashtags_is_accepted(self):
+        result = Verifier().verify(
+            _row(
+                platform=Platform.TWITTER,
+                text="Some post. #metal #doom " + "extra " * 60,
+                label="promo",
+            ),
+            _violation(rule_id="twitter_length"),
+            FixProposal(
+                action="edit_text",
+                new_text="Some post. #metal #doom",
+                reason="shortened while keeping hashtags",
+            ),
+        )
         assert result.accepted
 
 

@@ -50,6 +50,12 @@ class _RowWork:
         self.trace.append(TraceEvent(step=step, detail=detail, payload=payload))
 
 
+def _synthetic_raw(row: CsvRow) -> list[str]:
+    """A 12-field Publer-template line for rows that have no source CSV."""
+    return [row.date, row.text, row.link, row.media_url, row.title, row.label,
+            "", "", "", "", "", ""]
+
+
 def _fallback_triage(violations: list[Violation]) -> TriageDecision:
     """
     Deterministic triage used when the Triage LLM returns unparseable output.
@@ -94,13 +100,10 @@ class Orchestrator:
 
     def run(self, state: PipelineState) -> PipelineState:
         # ── Step 1: Lint ──────────────────────────────────────────────────────
-        # Reconstruct 7-column rows matching the Publer export format:
-        # Scheduled Date, Type, Text, Media URL, Hashtags, Tagged Users, Title
-        # (Hashtags are already merged into .text; columns 4-5 are left empty.)
-        raw_rows = [
-            [r.date, r.title, r.text, r.media_url, "", "", r.label]
-            for r in state.rows
-        ]
+        # Use the file's real raw lines so column_count judges actual
+        # structure. Rows built without a source CSV (plan ingestion) get
+        # synthesized 12-field lines — trivially valid by construction.
+        raw_rows = state.raw_rows or [_synthetic_raw(r) for r in state.rows]
         state.violations = lint_all(raw_rows, state.rows)
         state.log(
             "lint",
@@ -208,11 +211,9 @@ class Orchestrator:
         # to length turns a flat-URL CTA into a markdown link, breaking
         # cta_format). A full re-lint of the final rows is the only thing that
         # catches that class of failure.
-        post_raw = [
-            [r.date, r.title, r.text, r.media_url, "", "", r.label]
-            for r in state.rows
-        ]
-        state.final_violations = lint_all(post_raw, state.rows)
+        # Fixes edit fields, never structure, so the original raw lines
+        # still describe the file's column layout.
+        state.final_violations = lint_all(raw_rows, state.rows)
         initial_keys = {(v.rule_id, v.row_index) for v in state.violations}
         introduced = [
             v for v in state.final_violations
@@ -288,7 +289,7 @@ class Orchestrator:
                     attempt_number=attempt,
                     rule_id=violation.rule_id,
                     row_index=violation.row_index,
-                    model_used=FixerAgent.MODEL,
+                    model_used=self._fixer.model,
                     outcome=FixOutcome.UNFIXED,
                     gate_rejection="unparseable_output",
                 ))
@@ -317,7 +318,7 @@ class Orchestrator:
                     attempt_number=attempt,
                     rule_id=violation.rule_id,
                     row_index=violation.row_index,
-                    model_used=FixerAgent.MODEL,
+                    model_used=self._fixer.model,
                     outcome=FixOutcome.ESCALATED,
                     gate_rejection="cannot_fix",
                 ))
@@ -340,7 +341,7 @@ class Orchestrator:
                     attempt_number=attempt,
                     rule_id=violation.rule_id,
                     row_index=violation.row_index,
-                    model_used=FixerAgent.MODEL,
+                    model_used=self._fixer.model,
                     proposed_text=proposal.new_text,
                     proposed_media_url=result.new_row.media_url,
                     outcome=FixOutcome.FIXED,
@@ -362,7 +363,7 @@ class Orchestrator:
                 attempt_number=attempt,
                 rule_id=violation.rule_id,
                 row_index=violation.row_index,
-                model_used=FixerAgent.MODEL,
+                model_used=self._fixer.model,
                 proposed_text=proposal.new_text,
                 outcome=FixOutcome.UNFIXED,
                 gate_rejection=result.gate_failure,

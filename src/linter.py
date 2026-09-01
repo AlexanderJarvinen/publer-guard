@@ -25,7 +25,9 @@ from .state import CsvRow, Platform, Severity, Violation, _extract_hashtags
 # anything else is a malformed date.
 _DATE_FORMAT = "%Y/%m/%d %H:%M"
 _DATE_ONLY_FORMAT = "%Y/%m/%d"
-_EXPECTED_COLUMNS = 7
+# The canonical row shape everywhere is the Publer 12-column bulk-import
+# template (ingest.PUBLER_HEADER); the first six columns carry the data.
+_EXPECTED_COLUMNS = 12
 _TWITTER_MAX_CHARS = 280
 
 # 2084 series: Label contains this string (case-insensitive) — user-tunable here
@@ -53,7 +55,7 @@ _CYRILLIC_RE = re.compile(r"[Ѐ-ӿ]")
 
 def check_column_count(raw_rows: list[list[str]]) -> list[Violation]:
     """
-    Each data row must have exactly 6 fields.
+    Each data row must have exactly 12 fields (the Publer template).
     raw_rows: list of already-split CSV data lines (header excluded).
     row_index matches the position in this list (0-based).
     """
@@ -66,8 +68,8 @@ def check_column_count(raw_rows: list[list[str]]) -> list[Violation]:
                 severity=Severity.ERROR,
                 message=(
                     f"Row {row_index} has {len(fields)} columns; "
-                    f"expected {_EXPECTED_COLUMNS} "
-                    f"(Scheduled Date, Type, Text, Media URL, Hashtags, Tagged Users, Title)."
+                    f"expected {_EXPECTED_COLUMNS} (the Publer bulk-import template: "
+                    f"Date, Text, Link(s), Media URL(s), Title, Label(s), + 6 optional)."
                 ),
                 auto_fixable=False,
             ))
@@ -182,8 +184,9 @@ def _cta_present(text: str) -> bool:
 
 def _has_markdown_link(text: str) -> bool:
     """True if text contains a markdown link pointing to the CTA Instagram profile."""
+    # Scheme is optional: [IG](instagram.com/...) is still a markdown link.
     pattern = (
-        r"\[.+?\]\(https?://(?:www\.)?instagram\.com/"
+        r"\[.+?\]\((?:https?://)?(?:www\.)?instagram\.com/"
         + re.escape(_CTA_HANDLE)
         + r"[^)]*\)"
     )
@@ -195,8 +198,9 @@ def _has_flat_url(text: str) -> bool:
     True if text contains the CTA as a bare URL (not inside a markdown link).
     Strips markdown link syntax first to avoid false positives.
     """
-    # Remove markdown links so we don't match the URL inside [text](url)
-    stripped = re.sub(r"\[.+?\]\(https?://[^)]+\)", "", text)
+    # Remove markdown links (with or without a scheme) so we don't match
+    # the URL inside [text](url)
+    stripped = re.sub(r"\[.+?\]\([^)]+\)", "", text)
     return bool(re.search(
         r"(?:IG:\s*)?instagram\.com/" + re.escape(_CTA_HANDLE),
         stripped,

@@ -46,8 +46,8 @@ def _row(**kwargs) -> CsvRow:
 # ===========================================================================
 
 class TestColumnCount:
-    def test_exactly_seven_columns_is_clean(self):
-        assert check_column_count([["a", "b", "c", "d", "e", "f", "g"]]) == []
+    def test_exactly_twelve_columns_is_clean(self):
+        assert check_column_count([["a"] * 12]) == []
 
     def test_five_columns_fires(self):
         v = check_column_count([["a", "b", "c", "d", "e"]])
@@ -55,16 +55,16 @@ class TestColumnCount:
         assert v[0].rule_id == "column_count"
         assert v[0].row_index == 0
 
-    def test_eight_columns_fires(self):
-        v = check_column_count([["a", "b", "c", "d", "e", "f", "g", "h"]])
+    def test_thirteen_columns_fires(self):
+        v = check_column_count([["a"] * 13])
         assert len(v) == 1
         assert v[0].rule_id == "column_count"
 
     def test_only_bad_rows_fire_in_multi_row_input(self):
         raw = [
-            ["a", "b", "c", "d", "e", "f", "g"],  # OK — 7 columns
-            ["x", "y"],                              # bad — row 1
-            ["a", "b", "c", "d", "e", "f", "g"],  # OK — 7 columns
+            ["a"] * 12,      # OK — 12 columns (the Publer template)
+            ["x", "y"],      # bad — row 1
+            ["a"] * 12,      # OK — 12 columns
         ]
         v = check_column_count(raw)
         assert len(v) == 1

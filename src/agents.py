@@ -315,10 +315,14 @@ class TriageAgent:
     auto_fixable, message. No row text, no media URLs, no CSV content.
     """
 
-    MODEL = os.environ.get("TRIAGE_MODEL", "claude-haiku-4-5")
+    MODEL = "claude-haiku-4-5"   # default; override via TRIAGE_MODEL env var
 
     def __init__(self, client: LLMClient) -> None:
         self._client = client
+        # Read at construction time, not import time — load_dotenv() must
+        # already have run (AnthropicClient's __init__ calls it) for .env
+        # overrides to be visible on the CLI path.
+        self.model = os.environ.get("TRIAGE_MODEL", self.MODEL)
 
     @property
     def client(self) -> LLMClient:
@@ -336,7 +340,7 @@ class TriageAgent:
             for v in violations
         ]
         user = json.dumps({"violations": compact})
-        raw = self._client.complete(model=self.MODEL, system=_TRIAGE_SYSTEM, user=user)
+        raw = self._client.complete(model=self.model, system=_TRIAGE_SYSTEM, user=user)
         return _parse_or_raise(raw, TriageDecision, "TriageAgent")
 
 
@@ -349,10 +353,11 @@ class FixerAgent:
     cannot write a fabricated URL regardless of what the model outputs.
     """
 
-    MODEL = os.environ.get("FIXER_MODEL", "claude-sonnet-4-6")
+    MODEL = "claude-sonnet-4-6"  # default; override via FIXER_MODEL env var
 
     def __init__(self, client: LLMClient) -> None:
         self._client = client
+        self.model = os.environ.get("FIXER_MODEL", self.MODEL)
 
     @property
     def client(self) -> LLMClient:
@@ -383,7 +388,7 @@ class FixerAgent:
             "previous_attempt_failed": critic_note,
         }
         user = json.dumps(payload)
-        raw = self._client.complete(model=self.MODEL, system=_FIXER_SYSTEM, user=user)
+        raw = self._client.complete(model=self.model, system=_FIXER_SYSTEM, user=user)
         return _parse_or_raise(raw, FixProposal, "FixerAgent")
 
 
@@ -395,10 +400,11 @@ class CriticAgent:
     the rejected proposal, and the gate failure reason. Nothing else.
     """
 
-    MODEL = os.environ.get("CRITIC_MODEL", "claude-opus-4-8")
+    MODEL = "claude-opus-4-8"    # default; override via CRITIC_MODEL env var
 
     def __init__(self, client: LLMClient) -> None:
         self._client = client
+        self.model = os.environ.get("CRITIC_MODEL", self.MODEL)
 
     @property
     def client(self) -> LLMClient:
@@ -424,5 +430,5 @@ class CriticAgent:
             "gate_failure": gate_failure,
         }
         user = json.dumps(payload)
-        raw = self._client.complete(model=self.MODEL, system=_CRITIC_SYSTEM, user=user)
+        raw = self._client.complete(model=self.model, system=_CRITIC_SYSTEM, user=user)
         return _parse_or_raise(raw, CriticNote, "CriticAgent")

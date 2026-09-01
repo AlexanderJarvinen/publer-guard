@@ -69,8 +69,8 @@ Neither the test suite nor the eval harness needs an API key — both run agains
 a fake LLM client, so a fresh clone can verify the whole pipeline offline:
 
 ```bash
-pytest                  # 242 tests
-python -m eval.runner   # 6 known cases; prints the first-attempt fix rate
+pytest                  # 243 tests
+python -m eval.runner   # 7 known cases; prints the first-attempt fix rate
 ```
 
 ---
@@ -81,14 +81,14 @@ Everything below is reproducible offline — CI re-checks it on every push.
 
 | Metric | Value | Where it comes from |
 |---|---|---|
-| Unit tests | **242 passing** | `pytest` — linter rules, verifier gates, agents (against a fake LLM), ingestion, failure handling |
-| Eval scenarios | **6/6 passing** | `python -m eval.runner` — full pipeline runs on known CSVs with pinned expected outcomes |
-| First-attempt fix rate | **60%** | 3 of 5 auto-fixable violations fixed on the Fixer's first proposal |
+| Unit tests | **243 passing** | `pytest` — linter rules, verifier gates, agents (against a fake LLM), ingestion, failure handling |
+| Eval scenarios | **7/7 passing** | `python -m eval.runner` — full pipeline runs on known CSVs with pinned expected outcomes |
+| First-attempt fix rate | **67%** | 4 of 6 auto-fixable violations fixed on the Fixer's first proposal |
 | LLM calls on a clean file | **0** | The linter finds nothing, so no agent is ever invoked |
 | Parallel row fixing | **45s → 11s** | Six independent CTA repairs, before/after `MAX_PARALLEL_ROWS` |
 
-The 60% is not a shortfall — the eval set is built to exercise every path,
-including the hard ones. Of the five fixable violations: three are fixed on
+The 67% is not a shortfall — the eval set is built to exercise every path,
+including the hard ones. Of the six fixable violations: four are fixed on
 the first attempt; one is *designed* to fail Gate 2 (content preservation)
 so the Critic loop gets exercised, and succeeds on attempt two; one has no
 legal fix (`lookup_media` finds nothing) and must escalate to a human —

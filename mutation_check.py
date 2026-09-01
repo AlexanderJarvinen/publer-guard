@@ -36,8 +36,8 @@ BACKUP = Path("src/linter.py.bak")
 MUTANTS = [
     dict(
         name="date_format: accepts any date",
-        find='    try:\n        datetime.strptime(row.date.strip(), _DATE_FORMAT)\n        return []\n    except ValueError:',
-        repl='    if True:\n        return []\n    try:\n        datetime.strptime(row.date.strip(), _DATE_FORMAT)\n    except ValueError:',
+        find='    value = row.date.strip()\n    for fmt in (_DATE_FORMAT, _DATE_ONLY_FORMAT):',
+        repl='    value = row.date.strip()\n    if True:\n        return []\n    for fmt in (_DATE_FORMAT, _DATE_ONLY_FORMAT):',
         red="tests/test_linter.py::TestDateFormat::test_us_format_fires",
     ),
     dict(

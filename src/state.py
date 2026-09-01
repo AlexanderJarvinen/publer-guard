@@ -131,6 +131,12 @@ class PipelineState(BaseModel):
     The whole run. The orchestrator owns this; sub-agents get slices.
     """
     rows: list[CsvRow]
+    # The file's real split data lines (header excluded), in row order —
+    # what check_column_count judges. Lanes that build rows directly
+    # (plan ingestion) leave this empty and the orchestrator synthesizes
+    # structurally-valid 12-field lines, making the rule vacuous there on
+    # purpose: our own code generated the columns.
+    raw_rows: list[list[str]] = Field(default_factory=list)
     violations: list[Violation] = Field(default_factory=list)
     attempts: list[FixAttempt] = Field(default_factory=list)
     trace: list[TraceEvent] = Field(default_factory=list)
