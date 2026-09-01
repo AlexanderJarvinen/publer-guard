@@ -69,6 +69,13 @@ def _unique_output_path(name: str) -> Path:
 
 @app.route("/")
 def index():
+    # A page load starts a fresh session: the download buttons from the
+    # previous one are gone with it, so its files are unreachable — clear
+    # them instead of letting output/ grow forever on a server.
+    if _OUTPUT_DIR.exists():
+        for f in _OUTPUT_DIR.iterdir():
+            if f.is_file():
+                f.unlink()
     platforms = [p.value for p in Platform]
     return render_template("index.html", platforms=platforms)
 
