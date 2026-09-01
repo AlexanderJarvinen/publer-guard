@@ -130,7 +130,7 @@ validation rather than vibes.
 ## Input: the content plan
 
 The source is a single spreadsheet (`.ods`, `.xls` or `.xlsx`), sheet
-**`Контент-план`**. One reader per format — `odfpy`, `xlrd`, `openpyxl` —
+**`CONTENT PLAN`**. One reader per format — `odfpy`, `xlrd`, `openpyxl` —
 each normalised to the same internal grid, so everything downstream is
 format-blind.
 
@@ -172,8 +172,8 @@ every column must carry **exactly** the label the master template
 1-4**. Anything else and the file is refused, with every wrong column listed:
 
 ```
-Колонка C: ожидается «Post publication time», найдено «Время публикации»
-Колонка BL: отсутствует заголовок «Shorts publication time»
+Column C: expected “Post publication time”, found “Время публикации”
+Column BL: header “Shorts publication time” is missing
 ```
 
 The contract is `EXPECTED_HEADERS` — **all 89 labelled columns**, not just the

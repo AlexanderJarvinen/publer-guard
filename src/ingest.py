@@ -1,7 +1,7 @@
 """
 ingest.py — deterministic converter: content-plan spreadsheet -> Publer CSVs.
 
-Reads the hand-filled `.ods`/`.xls`/`.xlsx` content plan (sheet "Контент-план") and
+Reads the hand-filled `.ods`/`.xls`/`.xlsx` content plan (sheet "CONTENT PLAN") and
 slices it into one `PlanCsv` per content unit — post, clip, reel, video,
 shorts. Each unit reads a fixed set of ABSOLUTE spreadsheet columns declared
 in `PLAN_SPECS`; units that share a date (e.g. FB posts and FB clips) each
@@ -67,7 +67,9 @@ def row_to_publer(row: CsvRow) -> list[str]:
 # Layout of the content-plan sheet (fixed, absolute spreadsheet columns)
 # ---------------------------------------------------------------------------
 
-CONTENT_SHEET = "Контент-план"
+# The canonical tab name; every reader falls back to the first sheet
+# when it is absent, so older plans (e.g. «Контент-план») still convert.
+CONTENT_SHEET = "CONTENT PLAN"
 
 
 def _col(ref: str) -> int:
@@ -106,7 +108,7 @@ class PlanSpec:
     media: str
     text: str
     hashtags: str | None = None
-    people: str | None = None    # "тэг людей", appended to the text
+    people: str | None = None    # the "tag people" column, appended to the text
     title: str | None = None     # YouTube video / shorts headline
 
     def columns(self) -> list[tuple[str, str]]:
@@ -225,7 +227,7 @@ EXPECTED_HEADERS: dict[str, str] = {
     "AZ": "Date",
     "BA": "Day",
     "BB": "Post publication time",
-    "BC": "Новостная лента \"Записи\"",
+    "BC": "Topic",
     "BD": "Post Text",
     "BE": "Photo/Video",
     "BF": "Media link for the post",
@@ -636,9 +638,9 @@ class HeaderMismatch:
 
     def message(self) -> str:
         if not self.found:
-            return f"Колонка {self.column}: отсутствует заголовок «{self.expected}»"
-        return (f"Колонка {self.column}: ожидается «{self.expected}», "
-                f"найдено «{self.found}»")
+            return f"Column {self.column}: header “{self.expected}” is missing"
+        return (f"Column {self.column}: expected “{self.expected}”, "
+                f"found “{self.found}”")
 
 
 class PlanLayoutError(ValueError):
@@ -652,7 +654,7 @@ class PlanLayoutError(ValueError):
     def __init__(self, mismatches: list[HeaderMismatch]):
         self.mismatches = mismatches
         super().__init__(
-            "; ".join(m.message() for m in mismatches) + " — необходимо поправить макет"
+            "; ".join(m.message() for m in mismatches) + " — fix the sheet layout first"
         )
 
 
@@ -726,9 +728,9 @@ class IncompleteRow(PlanWarning):
 
     def message(self) -> str:
         one = len(self.columns) == 1
-        return (f"{self.unit}, строка {self.sheet_row}: похоже, "
-                f"{'не заполнено поле' if one else 'не заполнены поля'} "
-                f"{', '.join(self.labelled())}. Пожалуйста, проверьте.")
+        return (f"{self.unit}, row {self.sheet_row}: "
+                f"{'field' if one else 'fields'} "
+                f"{', '.join(self.labelled())} left unfilled. Please check.")
 
 
 @dataclass(frozen=True)
@@ -742,9 +744,9 @@ class MissingHashtags(PlanWarning):
     kind: ClassVar[str] = "no_hashtags"
 
     def message(self) -> str:
-        return (f"{self.unit}, строка {self.sheet_row}: не заполнено поле "
-                f"{', '.join(self.labelled())} — пост уйдёт без хэштегов. "
-                f"Пожалуйста, проверьте.")
+        return (f"{self.unit}, row {self.sheet_row}: field "
+                f"{', '.join(self.labelled())} is empty — the post will go "
+                f"out without hashtags. Please check.")
 
 
 @dataclass(frozen=True)
@@ -759,9 +761,9 @@ class MalformedHashtags(PlanWarning):
     kind: ClassVar[str] = "malformed_hashtags"
 
     def message(self) -> str:
-        return (f"{self.unit}, строка {self.sheet_row}: в поле "
-                f"{', '.join(self.labelled())} есть текст, но нет ни одного "
-                f"«#» — теги уйдут как обычные слова. Пожалуйста, проверьте.")
+        return (f"{self.unit}, row {self.sheet_row}: field "
+                f"{', '.join(self.labelled())} has text but not a single "
+                f"“#” — the tags will publish as plain words. Please check.")
 
 
 @dataclass

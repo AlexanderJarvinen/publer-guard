@@ -413,7 +413,7 @@
 
     <!-- Unfinished plan rows (content-plan runs only) -->
     <div class="card hidden" id="ingestion-card">
-      <h2>Незаполненные строки плана</h2>
+      <h2>Unfinished plan rows</h2>
       <div id="ingestion-body"></div>
     </div>
 
@@ -813,10 +813,10 @@
       <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">
         <span style="color:var(--accent);font-size:15px;">${spin}</span>
         <span style="color:var(--text);font-size:14px;">
-          ${unit ? escHtml(unit) : 'Разбор плана'}
+          ${unit ? escHtml(unit) : 'Parsing the plan'}
         </span>
         <span style="color:var(--muted);font-size:13px;">
-          ${total ? `${done + 1} из ${total}` : ''}${rows ? ` · ${rows} ${plural(rows, 'пост', 'постов')}` : ''}
+          ${total ? `${done + 1} of ${total}` : ''}${rows ? ` · ${rows} ${plural(rows, 'post', 'posts')}` : ''}
           · ${seconds}s
         </span>
       </div>
@@ -910,17 +910,17 @@
                   margin-top:14px;padding-top:12px;
                   border-top:1px solid rgba(255,255,255,.12);">
         <button type="button" class="dl-btn" onclick="layoutStep(-1)"
-                ${layoutPage === 0 ? 'disabled style="opacity:.4;cursor:not-allowed"' : ''}>← Назад</button>
+                ${layoutPage === 0 ? 'disabled style="opacity:.4;cursor:not-allowed"' : ''}>← Back</button>
         <span style="opacity:.75;font-size:13px;">
-          ${from + 1}–${from + shown.length} из ${total} &nbsp;·&nbsp; стр. ${layoutPage + 1} из ${pages}
+          ${from + 1}–${from + shown.length} of ${total} &nbsp;·&nbsp; page ${layoutPage + 1} of ${pages}
         </span>
         <button type="button" class="dl-btn" onclick="layoutStep(1)"
-                ${layoutPage === pages - 1 ? 'disabled style="opacity:.4;cursor:not-allowed"' : ''}>Вперёд →</button>
+                ${layoutPage === pages - 1 ? 'disabled style="opacity:.4;cursor:not-allowed"' : ''}>Forward →</button>
       </div>` : '';
 
     el('error-box').innerHTML = `
       <div style="margin-bottom:10px;">
-        ${escHtml(layoutTitle)} <b>Неверных колонок: ${total}</b>
+        ${escHtml(layoutTitle)} <b>Mismatched columns: ${total}</b>
       </div>
       <ol start="${from + 1}" style="margin:0;padding-left:30px;line-height:1.7;">${items}</ol>
       ${pager}`;
@@ -939,10 +939,9 @@
   let ingestData = null;
   let ingestPage = 0;
 
-  // Russian agreement: 1 строка, 2-4 строки, 5 строк. Only the two forms the
-  // summary line needs — singular for 1 (and 21, 31…), plural otherwise.
+  // Singular for exactly 1, plural otherwise.
   function plural(n, one, many) {
-    return (n % 10 === 1 && n % 100 !== 11) ? one : many;
+    return n === 1 ? one : many;
   }
 
   function renderIngestion(ing) {
@@ -966,7 +965,7 @@
     const noFile = ing.units_without_file || [];
     const warn = noFile.length ? `
       <p style="color:var(--yellow-t);font-size:13px;margin-bottom:12px;">
-        Файл не создан для <b>${noFile.map(escHtml).join(', ')}</b>.
+        No file produced for <b>${noFile.map(escHtml).join(', ')}</b>.
       </p>` : '';
 
     const summary = (ing.by_unit || []).map(u => {
@@ -987,31 +986,31 @@
     const pager = pages > 1 ? `
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px;">
         <button type="button" class="dl-btn" onclick="ingestStep(-1)"
-                ${ingestPage === 0 ? 'disabled style="opacity:.4;cursor:not-allowed"' : ''}>← Назад</button>
+                ${ingestPage === 0 ? 'disabled style="opacity:.4;cursor:not-allowed"' : ''}>← Back</button>
         <span style="color:var(--muted);font-size:13px;">
-          ${from + 1}–${from + shown.length} из ${all.length} &nbsp;·&nbsp; стр. ${ingestPage + 1} из ${pages}
+          ${from + 1}–${from + shown.length} of ${all.length} &nbsp;·&nbsp; page ${ingestPage + 1} of ${pages}
         </span>
         <button type="button" class="dl-btn" onclick="ingestStep(1)"
-                ${ingestPage === pages - 1 ? 'disabled style="opacity:.4;cursor:not-allowed"' : ''}>Вперёд →</button>
+                ${ingestPage === pages - 1 ? 'disabled style="opacity:.4;cursor:not-allowed"' : ''}>Forward →</button>
       </div>` : '';
 
     el('ingestion-body').innerHTML = `
       <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">
         <b style="color:var(--text)">${total}</b>
-        ${total === 1 ? 'предупреждение' : 'предупреждений'}:
+        ${plural(total, 'warning', 'warnings')}:
         <b style="color:var(--yellow-t)">${ing.incomplete_rows}</b> ${plural(ing.incomplete_rows,
-          'строка не дозаполнена', 'строк не дозаполнено')},
+          'unfinished row', 'unfinished rows')},
         <b>${ing.posts_without_hashtags}</b> ${plural(ing.posts_without_hashtags,
-          'пост без хэштегов', 'постов без хэштегов')}${
+          'post without hashtags', 'posts without hashtags')}${
         (ing.malformed_hashtags || 0) > 0 ? `,
         <b style="color:var(--yellow-t)">${ing.malformed_hashtags}</b> ${plural(ing.malformed_hashtags,
-          'ячейка хэштегов без «#»', 'ячеек хэштегов без «#»')}` : ''}.
-        Полностью пустые строки не в счёт — там единицу контента просто не планировали.
+          'hashtag cell without a “#”', 'hashtag cells without a “#”')}` : ''}.
+        Fully empty rows are not counted — that content unit simply was not planned.
       </p>
       ${warn}
       <div class="table-wrap" style="margin-bottom:14px;">
         <table>
-          <thead><tr><th>Единица</th><th>Строк</th><th>Не заполнено</th></tr></thead>
+          <thead><tr><th>Unit</th><th>Rows</th><th>Unfilled</th></tr></thead>
           <tbody>${summary}</tbody>
         </table>
       </div>
@@ -1128,9 +1127,9 @@
       const gaps = f.unfinished_rows || [];
       const note = gaps.length ? `
         <div style="color:var(--yellow-t);font-size:12px;margin:-4px 0 2px 6px;">
-          ⚠ ${f.row_count} ${plural(f.row_count, 'пост', 'постов')} в файле,
-          ${gaps.length} ${plural(gaps.length, 'не дозаполнен', 'не дозаполнено')} —
-          ${plural(gaps.length, 'строка', 'строки')} плана ${gaps.join(', ')}
+          ⚠ ${f.row_count} ${plural(f.row_count, 'post', 'posts')} in this file,
+          ${gaps.length} unfinished —
+          plan ${plural(gaps.length, 'row', 'rows')} ${gaps.join(', ')}
         </div>` : '';
       return `
         <a class="dl-btn" href="/download/${encodeURIComponent(f.fixed_csv)}">

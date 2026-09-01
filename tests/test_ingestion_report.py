@@ -101,22 +101,22 @@ def test_row_detail_carries_the_sheet_row_columns_and_message():
     assert row["sheet_row"] == 12
     assert row["columns"] == ["BH", "BJ"]
     assert row["message"] == (
-        "YOUTUBE_VIDEO, строка 12: похоже, не заполнены поля "
-        "«Video header» (BH), «Media link for the Video» (BJ). Пожалуйста, проверьте."
+        "YOUTUBE_VIDEO, row 12: fields "
+        "«Video header» (BH), «Media link for the Video» (BJ) left unfilled. Please check."
     )
 
 
 def test_a_single_empty_field_reads_as_singular():
     (row,) = _ingestion_report(PlanSlices(warnings=[unfinished("TWITTER", 7, "CN")]))["rows"]
     assert row["message"] == (
-        "TWITTER, строка 7: похоже, не заполнено поле «Tweet text» (CN). "
-        "Пожалуйста, проверьте."
+        "TWITTER, row 7: field «Tweet text» (CN) left unfilled. "
+        "Please check."
     )
 
 
 def test_the_hashtag_warning_says_the_post_still_goes_out():
     (row,) = _ingestion_report(PlanSlices(warnings=[no_hashtags("TIKTOK", 9, "BZ")]))["rows"]
     assert row["message"] == (
-        "TIKTOK, строка 9: не заполнено поле «Hashtags» (BZ) — пост уйдёт без "
-        "хэштегов. Пожалуйста, проверьте."
+        "TIKTOK, row 9: field «Hashtags» (BZ) is empty — the post will go out "
+        "without hashtags. Please check."
     )

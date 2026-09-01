@@ -198,8 +198,9 @@ def test_optional_fields_are_not_required(stub_open, tmp_path):
     assert warning.kind == "no_hashtags"
     assert warning.columns == ("H",)
     assert warning.message() == (
-        f"FACEBOOK_OFFICIAL_POSTS, строка {FIRST_DATA_ROW}: не заполнено поле "
-        "«Hashtags for the post» (H) — пост уйдёт без хэштегов. Пожалуйста, проверьте."
+        f"FACEBOOK_OFFICIAL_POSTS, row {FIRST_DATA_ROW}: field "
+        "«Hashtags for the post» (H) is empty — the post will go out "
+        "without hashtags. Please check."
     )
 
 
@@ -215,7 +216,7 @@ def test_hashtag_cell_without_a_single_hash_warns(stub_open, tmp_path):
     (warning,) = sliced.warnings
     assert warning.kind == "malformed_hashtags"
     assert warning.columns == ("H",)
-    assert "нет ни одного" in warning.message()
+    assert "not a single" in warning.message()
 
 
 def test_hashtag_cell_with_hashes_does_not_warn(stub_open, tmp_path):
@@ -358,7 +359,7 @@ def test_instagram_people_tag_is_appended_to_text(stub_open, tmp_path):
 
 
 def test_instagram_reels_use_their_own_description(stub_open, tmp_path):
-    """Reels read Z (описание рилз), never S (текст поста)."""
+    """Reels read Z (Reels Description), never S (Post text)."""
     r1 = blank_row()
     put(r1, "O", date=dt.date(2026, 8, 12))
     put(r1, "S", text="POST text, must not leak into the reel")
@@ -477,7 +478,7 @@ def test_a_renamed_header_is_rejected():
     assert bad.expected == "Post publication time"
     assert bad.found == "Время публикации"
     assert bad.message() == (
-        "Колонка C: ожидается «Post publication time», найдено «Время публикации»"
+        "Column C: expected “Post publication time”, found “Время публикации”"
     )
 
 
@@ -485,7 +486,7 @@ def test_a_missing_header_is_reported_as_absent():
     (bad,) = check_layout(_Grid(header_band(BL="")))
 
     assert bad.units == ("YOUTUBE_SHORTS",)
-    assert bad.message() == "Колонка BL: отсутствует заголовок «Shorts publication time»"
+    assert bad.message() == "Column BL: header “Shorts publication time” is missing"
 
 
 def test_a_shifted_layout_fails_wholesale():
@@ -539,7 +540,7 @@ def test_slice_plan_refuses_a_broken_layout(tmp_path, monkeypatch):
 
     (bad,) = excinfo.value.mismatches
     assert bad.column == "CL"
-    assert "необходимо поправить макет" in str(excinfo.value)
+    assert "fix the sheet layout first" in str(excinfo.value)
 
 
 def test_all_mismatches_are_reported_at_once_left_to_right(tmp_path, monkeypatch):
@@ -658,8 +659,8 @@ def test_the_warning_reads_as_a_sentence(stub_open, tmp_path):
     stub_open([r1])
     warning = for_unit(slice_plan(tmp_path / "PLAN.ods"), "FACEBOOK_OFFICIAL_POSTS")
     assert warning.message() == (
-        f"FACEBOOK_OFFICIAL_POSTS, строка {FIRST_DATA_ROW}: похоже, не заполнено "
-        "поле «Post text» (E). Пожалуйста, проверьте."
+        f"FACEBOOK_OFFICIAL_POSTS, row {FIRST_DATA_ROW}: field "
+        "«Post text» (E) left unfilled. Please check."
     )
 
 
@@ -815,7 +816,7 @@ def test_xlsx_does_not_keep_the_file_locked(tmp_path):
 
 
 def test_xlsx_falls_back_to_the_first_sheet(tmp_path):
-    """Plans exported from other tools may not name the sheet Контент-план."""
+    """Plans exported from other tools may not name the sheet CONTENT PLAN."""
     plan = write_xlsx(tmp_path / "PLAN.xlsx", sheet_name="Sheet1")
     plans = slice_plan(plan).files
     assert plans and plans[0].rows

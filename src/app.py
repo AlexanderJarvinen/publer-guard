@@ -294,16 +294,16 @@ def run() -> Response | tuple[Response, int]:
     files = [f for f in files if f and f.filename]
 
     if not files:
-        return jsonify({"error": "Файлы не выбраны"}), 400
+        return jsonify({"error": "No files selected"}), 400
     if len(platforms) != len(files):
-        return jsonify({"error": "Каждому файлу должна соответствовать платформа"}), 400
+        return jsonify({"error": "Each file needs a platform"}), 400
 
     non_csv = [
         f.filename or "?" for f in files
         if not (f.filename or "").lower().endswith(".csv")
     ]
     if non_csv:
-        return jsonify({"error": "Только .csv файлы: " + ", ".join(non_csv)}), 400
+        return jsonify({"error": "Only .csv files are accepted: " + ", ".join(non_csv)}), 400
 
     max_retries = int(request.form.get("max_retries", 2))
 
@@ -313,11 +313,11 @@ def run() -> Response | tuple[Response, int]:
         # not blown up as a ValueError before any file is processed.
         for uploaded, platform_str in zip(files, platforms, strict=False):
             if not platform_str:
-                return jsonify({"error": f"Не выбрана платформа для {uploaded.filename}"}), 400
+                return jsonify({"error": f"No platform selected for {uploaded.filename}"}), 400
             try:
                 platform = Platform(platform_str)
             except ValueError:
-                return jsonify({"error": f"Неизвестная платформа: {platform_str}"}), 400
+                return jsonify({"error": f"Unknown platform: {platform_str}"}), 400
             reports.append(_run_one(uploaded, platform, max_retries))
 
         return jsonify(_merge_reports(reports))
@@ -332,12 +332,12 @@ def run_plan() -> Response | tuple[Response, int]:
     run each through the pipeline, and return one merged report."""
     uploaded = request.files.get("file")
     if not uploaded or not uploaded.filename:
-        return jsonify({"error": "Файл плана не выбран"}), 400
+        return jsonify({"error": "No plan file selected"}), 400
 
     ext = Path(uploaded.filename).suffix.lower()
     if ext not in PLAN_EXTENSIONS:
         allowed = " / ".join(PLAN_EXTENSIONS)
-        return jsonify({"error": f"Только {allowed} файлы контент-плана"}), 400
+        return jsonify({"error": f"Only {allowed} content-plan files are accepted"}), 400
 
     max_retries = int(request.form.get("max_retries", 2))
 
@@ -351,12 +351,12 @@ def run_plan() -> Response | tuple[Response, int]:
         sliced = slice_plan(tmp_path, source_name=uploaded.filename)
         if not sliced.files:
             detail = (
-                f" Незаполненных до конца строк: {len(sliced.warnings)}."
+                f" Rows left unfinished: {len(sliced.warnings)}."
                 if sliced.warnings else ""
             )
             return jsonify({
-                "error": "В плане не найдено ни одного поста "
-                         f"(лист «Контент-план»?).{detail}"
+                "error": "No posts found in the plan "
+                         f"(is the sheet named “CONTENT PLAN”?).{detail}"
             }), 400
 
         # Reading is done; everything below works from memory. Freeing the
@@ -399,7 +399,7 @@ def run_plan() -> Response | tuple[Response, int]:
         # however many: fixing the sheet means seeing all of them, so the UI
         # pages through the list rather than the server truncating it.
         return jsonify({
-            "error": "Макет не совпадает с шаблоном — необходимо поправить макет.",
+            "error": "The sheet layout does not match the template — fix it first.",
             "layout_mismatches": [
                 {
                     "column": m.column,
@@ -435,7 +435,7 @@ def download_all() -> Response | tuple[Response, int]:
     """
     requested = request.args.getlist("files")
     if not requested:
-        return jsonify({"error": "Нет файлов для архива"}), 400
+        return jsonify({"error": "No files requested for the archive"}), 400
 
     buf = io.BytesIO()
     added = 0
@@ -448,7 +448,7 @@ def download_all() -> Response | tuple[Response, int]:
                 added += 1
 
     if not added:
-        return jsonify({"error": "Файлы не найдены"}), 404
+        return jsonify({"error": "Files not found"}), 404
 
     buf.seek(0)
     return send_file(
