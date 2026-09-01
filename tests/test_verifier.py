@@ -5,8 +5,6 @@ All tests are deterministic — zero API calls, zero LLM interaction.
 
 from __future__ import annotations
 
-import pytest
-
 from src.agents import FixProposal
 from src.state import CsvRow, Platform, Severity, Violation
 from src.verifier import Verifier, VerifierResult

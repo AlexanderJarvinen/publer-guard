@@ -12,7 +12,7 @@ No LLM call is ever made here. The verdict is purely mechanical.
 
 from __future__ import annotations
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from pydantic import BaseModel
 
@@ -23,8 +23,8 @@ from .state import CsvRow, Violation
 
 class VerifierResult(BaseModel):
     accepted: bool
-    gate_failure: Optional[str] = None
-    new_row: Optional[CsvRow] = None
+    gate_failure: str | None = None
+    new_row: CsvRow | None = None
     # True when the failure means "escalate to human" rather than "retry with Critic"
     escalate: bool = False
 
@@ -39,7 +39,7 @@ class Verifier:
     """
 
     def __init__(
-        self, lookup_media_fn: Optional[Callable[[str], Optional[str]]] = None
+        self, lookup_media_fn: Callable[[str], str | None] | None = None
     ) -> None:
         if lookup_media_fn is not None:
             self._lookup = lookup_media_fn
@@ -53,6 +53,12 @@ class Verifier:
         violation: Violation,
         proposal: FixProposal,
     ) -> VerifierResult:
+        """Apply the proposal to a copy of the row and run the three gates.
+
+        The only binary verdict in the system: accepted (with the patched
+        row) or rejected (with the failing gate's reason, and escalate=True
+        when retrying is pointless).
+        """
         # ── 0. Build the new row ─────────────────────────────────────────────
         if proposal.action == "cannot_fix":
             return VerifierResult(
@@ -116,7 +122,7 @@ class Verifier:
     # ── Gate implementations ──────────────────────────────────────────────────
 
     @staticmethod
-    def _check_gate1(new_row: CsvRow, violation: Violation) -> Optional[str]:
+    def _check_gate1(new_row: CsvRow, violation: Violation) -> str | None:
         """The violated rule must no longer fire on the patched row."""
         still_failing = [v for v in lint_row(new_row) if v.rule_id == violation.rule_id]
         if still_failing:
@@ -129,7 +135,7 @@ class Verifier:
     @staticmethod
     def _check_gate2(
         original: CsvRow, fixed: CsvRow, violation: Violation
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Required content must not silently disappear.
 
@@ -168,7 +174,7 @@ class Verifier:
     @staticmethod
     def _check_gate3(
         original: CsvRow, fixed: CsvRow, proposal: FixProposal
-    ) -> Optional[str]:
+    ) -> str | None:
         """Media URL may only change as the result of a successful lookup_media call."""
         if proposal.action == "call_lookup_media":
             # URL change was sanctioned — just defensively confirm it's not a tmp link.

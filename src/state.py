@@ -15,7 +15,6 @@ Design notes (for the "context management" section of the demo):
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -93,11 +92,11 @@ class FixAttempt(BaseModel):
     rule_id: str
     row_index: int
     model_used: str
-    proposed_text: Optional[str] = None
-    proposed_media_url: Optional[str] = None
+    proposed_text: str | None = None
+    proposed_media_url: str | None = None
     outcome: FixOutcome
-    gate_rejection: Optional[str] = None   # which gate blocked it, if any
-    critic_note: Optional[str] = None
+    gate_rejection: str | None = None   # which gate blocked it, if any
+    critic_note: str | None = None
 
 
 class TraceEvent(BaseModel):

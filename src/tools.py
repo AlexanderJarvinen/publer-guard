@@ -46,7 +46,7 @@ def lookup_media(hint: str, _fixture_path: Path | None = None) -> str | None:
         raise FileNotFoundError(
             f"lookup_media: fixture not found at {fixture_path}. "
             "Ensure fixtures/media_library.json exists."
-        )
+        ) from None
 
     try:
         data = json.loads(raw)
@@ -54,7 +54,7 @@ def lookup_media(hint: str, _fixture_path: Path | None = None) -> str | None:
     except (json.JSONDecodeError, KeyError) as exc:
         raise ValueError(
             f"lookup_media: fixture at {fixture_path} is malformed — {exc}"
-        )
+        ) from exc
 
     hint_lower = hint.lower()
     matches = [

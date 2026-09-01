@@ -19,7 +19,6 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 # Allow running as `python -m eval.runner` from project root
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -27,8 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.agents import CriticAgent, FakeLLMClient, FixerAgent, TriageAgent
 from src.cli import parse_csv
 from src.orchestrator import Orchestrator
-from src.state import FixOutcome, Platform, PipelineState
-from src.verifier import Verifier
+from src.state import FixOutcome, PipelineState, Platform
 
 EVAL_DIR = Path(__file__).parent
 
@@ -366,10 +364,10 @@ CASES = [
     ("01_clean",              case_01_clean,         "0 violations - clean pass"),
     ("02_link_clear",         case_02_link_clear,    "link_empty cleared first try"),
     ("02_no_cyrillic",        case_02_no_cyrillic,   "no_cyrillic fixed first try"),
-    ("03_tmp_url_found",      case_03_tmp_url_found, "media_url_permanent fixed via lookup_media"),
-    ("04_twitter_length",     case_04_twitter_length,"twitter_length fixed first try"),
-    ("05_length_critic",      case_05_length_critic, "twitter_length fixed on 2nd attempt (Critic path)"),
-    ("06_lookup_not_found",   case_06_lookup_not_found,"media_url_permanent escalated (lookup=None)"),
+    ("03_tmp_url_found", case_03_tmp_url_found, "media_url_permanent fixed via lookup_media"),
+    ("04_twitter_length", case_04_twitter_length, "twitter_length fixed first try"),
+    ("05_length_critic", case_05_length_critic, "twitter_length fixed on 2nd attempt (Critic)"),
+    ("06_lookup_not_found", case_06_lookup_not_found, "media_url_permanent escalated (no match)"),
 ]
 
 

@@ -14,7 +14,7 @@ import json
 from src.agents import CriticAgent, FakeLLMClient, FixerAgent, TriageAgent
 from src.cli import build_report
 from src.orchestrator import Orchestrator
-from src.state import CsvRow, Platform, PipelineState
+from src.state import CsvRow, PipelineState, Platform
 
 
 def _orchestrator(fake: FakeLLMClient) -> Orchestrator:

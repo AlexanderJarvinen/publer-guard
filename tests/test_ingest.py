@@ -14,15 +14,15 @@ import pytest
 
 from src import ingest
 from src.ingest import (
-    HEADER_ROWS,
     EXPECTED_HEADERS,
+    HEADER_ROWS,
     PlanLayoutError,
     _Cell,
-    _Grid,
     _col,
+    _Grid,
     check_layout,
-    has_media,
     checked_columns,
+    has_media,
     slice_plan,
     units_reading,
 )

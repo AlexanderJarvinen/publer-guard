@@ -36,8 +36,11 @@ BACKUP = Path("src/linter.py.bak")
 MUTANTS = [
     dict(
         name="date_format: accepts any date",
-        find='    value = row.date.strip()\n    for fmt in (_DATE_FORMAT, _DATE_ONLY_FORMAT):',
-        repl='    value = row.date.strip()\n    if True:\n        return []\n    for fmt in (_DATE_FORMAT, _DATE_ONLY_FORMAT):',
+        find=('    value = row.date.strip()\n'
+              '    for fmt in (_DATE_FORMAT, _DATE_ONLY_FORMAT):'),
+        repl=('    value = row.date.strip()\n'
+              '    if True:\n        return []\n'
+              '    for fmt in (_DATE_FORMAT, _DATE_ONLY_FORMAT):'),
         red="tests/test_linter.py::TestDateFormat::test_us_format_fires",
     ),
     dict(
@@ -117,9 +120,11 @@ def main() -> int:
             killed = red_caught and green_ok
             flag = "OK " if killed else "XX "
             print(f"  [{flag}] Mutant {i}: {mut['name']}")
-            print(f"          red selector   -> {'RED (killed)' if red_caught else 'GREEN (SURVIVED!)'}")
+            red_note = "RED (killed)" if red_caught else "GREEN (SURVIVED!)"
+            print(f"          red selector   -> {red_note}")
             if "green" in mut:
-                print(f"          guard selector -> {'GREEN (ok)' if green_ok else 'RED (over-broad break!)'}")
+                guard_note = "GREEN (ok)" if green_ok else "RED (over-broad break!)"
+                print(f"          guard selector -> {guard_note}")
             print()
             if not killed:
                 survivors.append(mut["name"])

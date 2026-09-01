@@ -1,0 +1,21 @@
+[project]
+name = "publer-guard"
+version = "0.1.0"
+description = "Multi-agent validation and repair of Publer bulk-upload CSVs — LLMs propose, deterministic code decides"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# E/W: pycodestyle · F: pyflakes · UP: pyupgrade (e.g. Optional[X] -> X | None)
+# I: import ordering · B: common bugbear pitfalls
+select = ["E", "W", "F", "UP", "I", "B"]
+# UP042 wants `class Platform(StrEnum)` instead of `(str, Enum)`. Deliberate
+# ignore: StrEnum changes what str(member) returns, and these enums are
+# serialized through Pydantic — not worth a behavior risk for cosmetics.
+ignore = ["UP042"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]

@@ -9,7 +9,6 @@ import json
 
 import pytest
 
-from src.state import CsvRow, Platform, Severity, Violation
 from src.agents import (
     CriticAgent,
     CriticNote,
@@ -19,7 +18,7 @@ from src.agents import (
     TriageAgent,
     TriageDecision,
 )
-
+from src.state import CsvRow, Platform, Severity, Violation
 
 # ---------------------------------------------------------------------------
 # Helpers

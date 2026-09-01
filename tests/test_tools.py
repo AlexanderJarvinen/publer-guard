@@ -7,8 +7,9 @@ unusual data build a temporary fixture via pytest's tmp_path.
 """
 
 import json
-import pytest
 from pathlib import Path
+
+import pytest
 
 from src.tools import lookup_media
 

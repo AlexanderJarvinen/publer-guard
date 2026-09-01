@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Optional
 
 from .agents import (
     CriticAgent,
@@ -76,7 +75,7 @@ def _fallback_triage(violations: list[Violation]) -> TriageDecision:
 
 def _find_violation(
     violations: list[Violation], rule_id: str, row_index: int
-) -> Optional[Violation]:
+) -> Violation | None:
     for v in violations:
         if v.rule_id == rule_id and v.row_index == row_index:
             return v
@@ -89,7 +88,7 @@ class Orchestrator:
         triage: TriageAgent,
         fixer: FixerAgent,
         critic: CriticAgent,
-        verifier: Optional[Verifier] = None,
+        verifier: Verifier | None = None,
         max_parallel_rows: int = MAX_PARALLEL_ROWS,
     ) -> None:
         self._triage = triage
@@ -99,6 +98,10 @@ class Orchestrator:
         self._max_parallel_rows = max(1, max_parallel_rows)
 
     def run(self, state: PipelineState) -> PipelineState:
+        """Drive one full pass: lint → triage → parallel fix/verify → re-lint.
+
+        Mutates and returns `state`; every step appends to its trace.
+        """
         # ── Step 1: Lint ──────────────────────────────────────────────────────
         # Use the file's real raw lines so column_count judges actual
         # structure. Rows built without a source CSV (plan ingestion) get
@@ -196,7 +199,7 @@ class Orchestrator:
                 done = [fix_one(item) for item in batch]
 
             # Merged in submission order, not completion order.
-            for (row_index, _), work in zip(batch, done):
+            for (row_index, _), work in zip(batch, done, strict=True):
                 position = next(
                     i for i, r in enumerate(state.rows) if r.row_index == row_index
                 )
@@ -260,7 +263,7 @@ class Orchestrator:
     def _fix_violation(
         self, work: _RowWork, violation: Violation, max_retries: int
     ) -> None:
-        critic_note: Optional[str] = None
+        critic_note: str | None = None
 
         for attempt in range(1, max_retries + 1):
             row = work.row

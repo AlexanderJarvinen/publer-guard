@@ -6,20 +6,18 @@ Design contract: every test asserts on rule_id so it fails if the wrong
 rule fires. Tests must catch a broken rule without knowing how it is broken.
 """
 
-import pytest
 
-from src.state import CsvRow, Platform
 from src.linter import (
     check_column_count,
+    check_cta_format,
     check_date_format,
     check_link_empty,
     check_media_url_permanent,
-    check_twitter_length,
-    check_cta_format,
     check_no_cyrillic,
+    check_twitter_length,
     lint_row,
 )
-
+from src.state import CsvRow, Platform
 
 # ---------------------------------------------------------------------------
 # Fixture helper — build a minimal valid CsvRow; override with kwargs

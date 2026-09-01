@@ -27,10 +27,11 @@ data, the rest stay empty.
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar, Optional
+from typing import ClassVar
 
 from .state import CsvRow, Platform
 
@@ -104,9 +105,9 @@ class PlanSpec:
     time: str
     media: str
     text: str
-    hashtags: Optional[str] = None
-    people: Optional[str] = None    # "тэг людей", appended to the text
-    title: Optional[str] = None     # YouTube video / shorts headline
+    hashtags: str | None = None
+    people: str | None = None    # "тэг людей", appended to the text
+    title: str | None = None     # YouTube video / shorts headline
 
     def columns(self) -> list[tuple[str, str]]:
         """(field name, column letter) for every column this unit reads."""
@@ -290,8 +291,8 @@ _MAX_ROWS = 1000   # content plans are ~a few hundred rows; ignore full-sheet pa
 @dataclass
 class _Cell:
     text: str = ""
-    date: Optional[dt.date] = None
-    time: Optional[tuple[int, int]] = None
+    date: dt.date | None = None
+    time: tuple[int, int] | None = None
 
 
 def _number_cell(value: float) -> _Cell:
@@ -333,25 +334,25 @@ class _Grid:
         """The label this cell contributes to column `c`."""
         return self._at(r, c).text.strip()
 
-    def _at(self, r: int, c: Optional[int]) -> _Cell:
+    def _at(self, r: int, c: int | None) -> _Cell:
         if c is None or r >= self.nrows or c >= len(self.cells[r]):
             return _Cell()
         return self.cells[r][c]
 
-    def cell_str(self, r: int, c: Optional[int]) -> str:
+    def cell_str(self, r: int, c: int | None) -> str:
         return self._at(r, c).text
 
-    def cell_date(self, r: int, c: Optional[int]) -> Optional[dt.date]:
+    def cell_date(self, r: int, c: int | None) -> dt.date | None:
         d = self._at(r, c).date
         return d if d and 2000 <= d.year <= 2100 else None
 
-    def cell_time(self, r: int, c: Optional[int]) -> Optional[tuple[int, int]]:
+    def cell_time(self, r: int, c: int | None) -> tuple[int, int] | None:
         return self._at(r, c).time
 
 
 # ---- .xls backend (xlrd) --------------------------------------------------
 
-def _xlrd_string_record_contents(self, data):
+def _xlrd_string_record_contents(self, data: bytes) -> str:
     """xlrd's STRING-record reader, corrected for non-BMP characters.
 
     BIFF declares a string's length in UTF-16 code units; xlrd compares that
@@ -367,7 +368,7 @@ def _xlrd_string_record_contents(self, data):
     """
     from struct import unpack
 
-    from xlrd.biffh import XLRDError, XL_CONTINUE
+    from xlrd.biffh import XL_CONTINUE, XLRDError
 
     bv = self.biff_version
     bk = self.book
@@ -399,7 +400,7 @@ def _xlrd_string_record_contents(self, data):
 
 
 @contextmanager
-def _patched_xlrd():
+def _patched_xlrd() -> Iterator[None]:
     """Apply the fix above for the duration of one read.
 
     Scoped rather than installed at import: this reaches into another
@@ -426,6 +427,7 @@ def _read_xls(path: Path) -> _Grid:
         sh = wb.sheet_by_index(0)
 
     def to_cell(r: int, c: int) -> _Cell:
+        """One xlrd cell → the format-blind _Cell the slicer reads."""
         ctype = sh.cell_type(r, c)
         val = sh.cell_value(r, c)
         cell = _Cell()
@@ -457,7 +459,8 @@ def _read_xlsx(path: Path) -> _Grid:
     wb = load_workbook(str(path), data_only=True, read_only=True)
     sheet = wb[CONTENT_SHEET] if CONTENT_SHEET in wb.sheetnames else wb[wb.sheetnames[0]]
 
-    def to_cell(val) -> _Cell:
+    def to_cell(val: object) -> _Cell:
+        """One openpyxl cell value → the format-blind _Cell the slicer reads."""
         if val is None:                       # includes merged-range followers
             return _Cell()
         # datetime before date, bool before int — both are subclasses.
@@ -494,7 +497,7 @@ def _read_xlsx(path: Path) -> _Grid:
 
 def _read_ods(path: Path) -> _Grid:
     from odf.opendocument import load
-    from odf.table import Table, TableRow, TableCell
+    from odf.table import Table, TableRow
     from odf.text import P
 
     doc = load(str(path))
@@ -509,13 +512,15 @@ def _read_ods(path: Path) -> _Grid:
     if sheet is None:
         return _Grid([])
 
-    def cell_text(cell) -> str:
+    def cell_text(cell: object) -> str:
+        """Visible text of an ODF cell: its <text:p> paragraphs, joined."""
         parts = []
         for p in cell.getElementsByType(P):
             parts.append(str(p))
         return "\n".join(parts).strip()
 
-    def parse_cell(cell) -> _Cell:
+    def parse_cell(cell: object) -> _Cell:
+        """One ODF cell → the format-blind _Cell the slicer reads."""
         vtype = cell.getAttribute("valuetype")
         out = _Cell()
         if vtype == "date":
@@ -539,9 +544,11 @@ def _read_ods(path: Path) -> _Grid:
                 if ch.isdigit():
                     num += ch
                 elif ch == "H":
-                    h = int(num or 0); num = ""
+                    h = int(num or 0)
+                    num = ""
                 elif ch == "M":
-                    m = int(num or 0); num = ""
+                    m = int(num or 0)
+                    num = ""
                 elif ch in ("S", "T", "P"):
                     num = ""
             out.time = (h, m)
@@ -786,7 +793,7 @@ def _combine_text(*parts: str) -> str:
     return "\n\n".join(p.strip() for p in parts if p and p.strip())
 
 
-def _build_date(d: Optional[dt.date], hm: Optional[tuple[int, int]]) -> str:
+def _build_date(d: dt.date | None, hm: tuple[int, int] | None) -> str:
     """Whatever of the date is filled in — nothing is invented.
 
     A row can reach the CSV with no time on purpose: the author may mean to
@@ -800,7 +807,7 @@ def _build_date(d: Optional[dt.date], hm: Optional[tuple[int, int]]) -> str:
     return f"{d:%Y/%m/%d} {hm[0]:02d}:{hm[1]:02d}"
 
 
-def slice_plan(path: Path, source_name: Optional[str] = None) -> PlanSlices:
+def slice_plan(path: Path, source_name: str | None = None) -> PlanSlices:
     """Read a content-plan spreadsheet into one CSV per content unit.
 
     Raises `PlanLayoutError` before converting anything if the sheet's layout
@@ -826,7 +833,7 @@ def slice_plan(path: Path, source_name: Optional[str] = None) -> PlanSlices:
 
     stem = _safe_name(Path(source_name or path.name).stem)
 
-    def get(r: int, ref: Optional[str]) -> str:
+    def get(r: int, ref: str | None) -> str:
         """Cell text by column letter; an unset column reads as empty."""
         return grid.cell_str(r, _col(ref)) if ref else ""
 

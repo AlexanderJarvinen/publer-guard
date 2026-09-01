@@ -2,6 +2,7 @@ anthropic>=0.40.0
 pydantic>=2.0
 python-dotenv>=1.0
 pytest>=8.0
+ruff>=0.16
 flask>=3.0
 xlrd>=2.0        # read .xls content plans (xlrd 2.x is .xls-only)
 openpyxl>=3.1    # read .xlsx content plans

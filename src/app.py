@@ -15,6 +15,7 @@ import json
 import tempfile
 import zipfile
 from collections import Counter
+from collections.abc import Iterator
 from pathlib import Path
 
 from flask import (
@@ -27,6 +28,7 @@ from flask import (
     send_from_directory,
     stream_with_context,
 )
+from werkzeug.datastructures import FileStorage
 
 try:
     from dotenv import load_dotenv
@@ -37,17 +39,17 @@ except ImportError:
 from .agents import AnthropicClient, CriticAgent, FixerAgent, TriageAgent
 from .cli import build_report, parse_csv, write_fixed_csv
 from .ingest import (
-    EXPECTED_HEADERS,
     PLAN_EXTENSIONS,
     PLAN_SPECS,
     PUBLER_HEADER,
+    PlanCsv,
     PlanLayoutError,
     PlanSlices,
     row_to_publer,
     slice_plan,
 )
 from .orchestrator import Orchestrator
-from .state import Platform, PipelineState
+from .state import PipelineState, Platform
 from .verifier import Verifier
 
 app = Flask(__name__, template_folder=str(Path(__file__).parent.parent / "templates"))
@@ -68,7 +70,8 @@ def _unique_output_path(name: str) -> Path:
 
 
 @app.route("/")
-def index():
+def index() -> str:
+    """Serve the single-page UI."""
     # A page load starts a fresh session: the download buttons from the
     # previous one are gone with it, so its files are unreachable — clear
     # them instead of letting output/ grow forever on a server.
@@ -80,7 +83,7 @@ def index():
     return render_template("index.html", platforms=platforms)
 
 
-def _run_one(uploaded, platform: Platform, max_retries: int) -> dict:
+def _run_one(uploaded: FileStorage, platform: Platform, max_retries: int) -> dict:
     """Run the pipeline on a single uploaded CSV and return its report,
     with every violation/attempt tagged by source filename."""
     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
@@ -124,7 +127,7 @@ def _run_one(uploaded, platform: Platform, max_retries: int) -> dict:
         tmp_path.unlink(missing_ok=True)
 
 
-def _run_plan_file(plan, max_retries: int) -> dict:
+def _run_plan_file(plan: PlanCsv, max_retries: int) -> dict:
     """Run the pipeline on one PlanCsv sliced from a content plan. Rows are
     already CsvRow objects with the platform assigned; output is written as a
     12-column Publer import template."""
@@ -214,9 +217,14 @@ def _merge_reports(reports: list[dict]) -> dict:
     summary = {k: sum(r["summary"][k] for r in reports) for k in summary_keys}
 
     # Recompute first-attempt rate across the combined fixable population.
-    total_fixable = sum(len([v for v in r["violations"] if v.get("auto_fixable")]) for r in reports)
+    total_fixable = sum(
+        len([v for v in r["violations"] if v.get("auto_fixable")]) for r in reports
+    )
     total_first_fixes = sum(
-        len([a for a in r["attempts"] if a.get("outcome") == "fixed" and a.get("attempt_number") == 1])
+        len([
+            a for a in r["attempts"]
+            if a.get("outcome") == "fixed" and a.get("attempt_number") == 1
+        ])
         for r in reports
     )
     summary["first_attempt_fix_rate"] = round(
@@ -279,7 +287,8 @@ def _merge_reports(reports: list[dict]) -> dict:
 
 
 @app.route("/run", methods=["POST"])
-def run():
+def run() -> Response | tuple[Response, int]:
+    """Validate and repair one or more uploaded CSVs; return a merged report."""
     files = request.files.getlist("files")
     platforms = request.form.getlist("platforms")
     files = [f for f in files if f and f.filename]
@@ -297,7 +306,9 @@ def run():
 
     try:
         reports = []
-        for uploaded, platform_str in zip(files, platforms):
+        # strict=False: a missing platform entry is reported per-file below,
+        # not blown up as a ValueError before any file is processed.
+        for uploaded, platform_str in zip(files, platforms, strict=False):
             if not platform_str:
                 return jsonify({"error": f"Не выбрана платформа для {uploaded.filename}"}), 400
             try:
@@ -313,7 +324,7 @@ def run():
 
 
 @app.route("/run-plan", methods=["POST"])
-def run_plan():
+def run_plan() -> Response | tuple[Response, int]:
     """Ingest a spreadsheet content plan: slice it into per-unit CSVs,
     run each through the pipeline, and return one merged report."""
     uploaded = request.files.get("file")
@@ -353,7 +364,8 @@ def run_plan():
         # A plan with real violations in it takes a minute of model round
         # trips. Streaming a line per file turns that from a hung browser tab
         # into something with a progress bar.
-        def report_progress():
+        def report_progress() -> Iterator[str]:
+            """Yield one NDJSON line per file processed, then the report."""
             total = len(sliced.files)
             try:
                 reports = []
@@ -405,12 +417,13 @@ def run_plan():
 
 
 @app.route("/download/<path:filename>")
-def download(filename: str):
+def download(filename: str) -> Response:
+    """Serve one fixed CSV from the output directory."""
     return send_from_directory(_OUTPUT_DIR, filename, as_attachment=True)
 
 
 @app.route("/download-all")
-def download_all():
+def download_all() -> Response | tuple[Response, int]:
     """Bundle the requested fixed CSVs into a single ZIP, built in-memory.
 
     Filenames come from the query string (?files=a.csv&files=b.csv). Only

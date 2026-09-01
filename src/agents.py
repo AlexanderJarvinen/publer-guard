@@ -16,12 +16,11 @@ import json
 import os
 import re
 import time
-from typing import Literal, Optional, Protocol, TypeVar, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ValidationError
 
 from .state import CallMetric, CsvRow, Violation
-
 
 # ---------------------------------------------------------------------------
 # Output models  (parsed from each agent's JSON response)
@@ -53,8 +52,8 @@ class FixProposal(BaseModel):
     inexpressible in this schema.
     """
     action: Literal["edit_text", "clear_link", "call_lookup_media", "cannot_fix"]
-    new_text: Optional[str] = None      # set when action == "edit_text"
-    lookup_hint: Optional[str] = None   # set when action == "call_lookup_media"
+    new_text: str | None = None      # set when action == "edit_text"
+    lookup_hint: str | None = None   # set when action == "call_lookup_media"
     reason: str
 
 
@@ -100,6 +99,7 @@ class AnthropicClient:
         self.metrics: list[CallMetric] = []
 
     def complete(self, *, model: str, system: str, user: str) -> str:
+        """One blocking Messages API call; appends a CallMetric with real usage."""
         start = time.perf_counter()
         msg = self._client.messages.create(
             model=model,
@@ -139,6 +139,7 @@ class FakeLLMClient:
         self.metrics: list[CallMetric] = []
 
     def complete(self, *, model: str, system: str, user: str) -> str:
+        """Pop the next canned response, recording the call for assertions."""
         self.last_model = model
         self.last_system = system
         self.last_user = user
@@ -165,9 +166,6 @@ class FakeLLMClient:
 # Shared parsing helper
 # ---------------------------------------------------------------------------
 
-_T = TypeVar("_T", bound=BaseModel)
-
-
 def _extract_json(raw: str) -> str:
     """
     Best-effort recovery of a JSON object from a model response.
@@ -188,7 +186,7 @@ def _extract_json(raw: str) -> str:
     return s
 
 
-def _parse_or_raise(raw: str, model_cls: type[_T], agent_name: str) -> _T:
+def _parse_or_raise[T: BaseModel](raw: str, model_cls: type[T], agent_name: str) -> T:
     """Parse raw JSON string into model_cls; re-raise as ValueError with context."""
     cleaned = _extract_json(raw)
     try:
@@ -329,6 +327,7 @@ class TriageAgent:
         return self._client
 
     def triage(self, violations: list[Violation]) -> TriageDecision:
+        """Order the violations for fixing and flag the human-only ones."""
         compact = [
             {
                 "rule_id": v.rule_id,
@@ -368,8 +367,13 @@ class FixerAgent:
         violation: Violation,
         row: CsvRow,
         *,
-        critic_note: Optional[str] = None,
+        critic_note: str | None = None,
     ) -> FixProposal:
+        """Propose one edit for one violation on one row — nothing wider.
+
+        `critic_note` carries the Critic's advice after a rejected attempt.
+        The proposal is exactly that: the Verifier decides its fate.
+        """
         payload = {
             "violation": {
                 "rule_id": violation.rule_id,
@@ -417,6 +421,7 @@ class CriticAgent:
         proposal: FixProposal,
         gate_failure: str,
     ) -> CriticNote:
+        """Explain why a rejected fix failed and suggest what to try instead."""
         payload = {
             "violation": {
                 "rule_id": violation.rule_id,

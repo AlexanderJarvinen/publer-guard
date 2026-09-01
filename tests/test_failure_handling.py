@@ -22,7 +22,7 @@ from src.agents import (
     _extract_json,
 )
 from src.orchestrator import Orchestrator
-from src.state import CsvRow, FixOutcome, Platform, PipelineState
+from src.state import CsvRow, FixOutcome, PipelineState, Platform
 
 
 def _orchestrator(fake: FakeLLMClient) -> Orchestrator:

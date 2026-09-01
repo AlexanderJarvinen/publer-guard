@@ -20,14 +20,12 @@ import csv
 import json
 import sys
 from pathlib import Path
-from typing import Optional
 
 from .agents import AnthropicClient, CriticAgent, FixerAgent, TriageAgent
 from .ingest import PUBLER_HEADER
 from .orchestrator import Orchestrator
-from .state import CsvRow, FixOutcome, Platform, PipelineState
+from .state import CsvRow, FixOutcome, PipelineState, Platform
 from .verifier import Verifier
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CSV I/O
@@ -71,7 +69,7 @@ def parse_csv(
 def write_fixed_csv(
     path: Path,
     rows: list[CsvRow],
-    raw_rows: Optional[list[list[str]]] = None,
+    raw_rows: list[list[str]] | None = None,
 ) -> None:
     """
     Write rows back in the canonical 12-column Publer template.
@@ -197,6 +195,8 @@ def build_post_fix_lint(state: PipelineState) -> dict:
 
 
 def build_report(state: PipelineState) -> dict:
+    """Assemble the full JSON report: summary, violations, attempts,
+    escalations, post-fix re-lint and cost/latency monitoring."""
     # Use final outcomes (last attempt per violation) for summary counts.
     final = _final_attempts(state)
     fixed = [a for a in final if a.outcome == FixOutcome.FIXED]
@@ -231,6 +231,11 @@ def build_report(state: PipelineState) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    """Parse args, run the pipeline on one CSV, write the three outputs.
+
+    Exit codes: 0 — clean or fully fixed; 1 — input file not found;
+    2 — manual review required (escalations, unfixed, or new violations).
+    """
     parser = argparse.ArgumentParser(
         description="publer-guard — validate and repair Publer bulk-upload CSVs"
     )
@@ -304,7 +309,7 @@ def main() -> None:
 
     # ── Summary ───────────────────────────────────────────────────────────────
     s = report["summary"]
-    print(f"\nDone.")
+    print("\nDone.")
     print(f"  Violations found:      {s['total_violations']}")
     print(f"  Fixed:                 {s['fixed']}")
     print(f"  Escalated to human:    {s['escalated_to_human']}")
