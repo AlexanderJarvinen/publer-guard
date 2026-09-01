@@ -1,5 +1,9 @@
 # publer-guard
 
+[![CI](https://github.com/AlexanderJarvinen/publer-guard/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/AlexanderJarvinen/publer-guard/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)
+
 A multi-agent system that turns a hand-filled content plan into
 **validated, import-ready Publer CSVs**. It ingests the plan, slices it
 into per-platform files, checks every row against a set of **mechanical,
@@ -68,6 +72,33 @@ a fake LLM client, so a fresh clone can verify the whole pipeline offline:
 pytest                  # 242 tests
 python -m eval.runner   # 6 known cases; prints the first-attempt fix rate
 ```
+
+---
+
+## Results
+
+Everything below is reproducible offline — CI re-checks it on every push.
+
+| Metric | Value | Where it comes from |
+|---|---|---|
+| Unit tests | **242 passing** | `pytest` — linter rules, verifier gates, agents (against a fake LLM), ingestion, failure handling |
+| Eval scenarios | **6/6 passing** | `python -m eval.runner` — full pipeline runs on known CSVs with pinned expected outcomes |
+| First-attempt fix rate | **60%** | 3 of 5 auto-fixable violations fixed on the Fixer's first proposal |
+| LLM calls on a clean file | **0** | The linter finds nothing, so no agent is ever invoked |
+| Parallel row fixing | **45s → 11s** | Six independent CTA repairs, before/after `MAX_PARALLEL_ROWS` |
+
+The 60% is not a shortfall — the eval set is built to exercise every path,
+including the hard ones. Of the five fixable violations: three are fixed on
+the first attempt; one is *designed* to fail Gate 2 (content preservation)
+so the Critic loop gets exercised, and succeeds on attempt two; one has no
+legal fix (`lookup_media` finds nothing) and must escalate to a human —
+inventing a URL would be the failure. The harness pins these expected
+outcomes exactly, which makes the fix rate a **degradation metric**: if a
+prompt or model change drops it, CI catches the regression before it ships.
+
+The escalation case is the system working as specified. A pipeline that
+"fixed" 100% of these cases would necessarily be fabricating media URLs —
+the exact hallucination the three verifier gates exist to block.
 
 ---
 
@@ -282,11 +313,41 @@ fields, not the Label column.
 | **Verifier** | **deterministic** | — | Re-runs the Linter on the proposed edit and applies three anti-hallucination gates. Issues the only binary verdict in the system. |
 | **Critic** | LLM | Opus 4.8 | Only invoked when a fix fails verification. Explains *why* and hands a focused note back to the Fixer. Expensive but rare. |
 
-The model tiering (Haiku / Sonnet / Opus) is a cost lever, not decoration:
-the cheap model does the cheap thinking, the expensive model is reserved
-for the rare hard case. Ingestion is deliberately **not** an agent —
-mapping spreadsheet columns to CSV columns is a fixed, mechanical
-transform with a single correct answer.
+Ingestion is deliberately **not** an agent — mapping spreadsheet columns
+to CSV columns is a fixed, mechanical transform with a single correct
+answer. See **Cost & model tiering** below for why the three agents run
+on three different models.
+
+### Cost & model tiering
+
+The model tiering (Haiku / Sonnet / Opus) is a cost lever, not decoration.
+Each agent gets the cheapest model that is reliable at its job, and the
+call frequency drops as the price rises:
+
+| Agent | Model | Price (in / out, per MTok) | Called | Why this tier |
+|---|---|---|---|---|
+| Triage | Haiku 4.5 | $1 / $5 | Once per file with violations | Ordering a short violation list is light reasoning — no generation quality needed |
+| Fixer | Sonnet 4.6 | $3 / $15 | Once per violation (plus retries) | The workhorse: rewriting a post within hard constraints needs real writing quality |
+| Critic | Opus 4.8 | $5 / $25 | **Only when a fix fails verification** | Diagnosing *why* a plausible fix was rejected is the hardest reasoning in the system — and the rarest |
+
+Three structural decisions keep the bill proportional to the number of
+*problems*, not the size of the input:
+
+1. **The expensive path is the exception path.** A clean file makes zero
+   LLM calls — the deterministic linter decides no work is needed, for
+   free. Opus is only reachable through a failed verification, so the
+   most expensive model runs the least.
+2. **Scoped inputs.** The Fixer sees one violation and one row — never
+   the whole CSV, never other agents' reasoning. Token count per call
+   stays in the hundreds regardless of how large the content plan is.
+3. **Deterministic verdicts are free.** Linting, verification, and all
+   three anti-hallucination gates are plain Python. The system never
+   spends tokens asking a model "is this fix correct?" — the answer
+   comes from re-running the checker.
+
+Each agent's model can be overridden via env (`TRIAGE_MODEL`,
+`FIXER_MODEL`, `CRITIC_MODEL` — see `.env.example`), so retiering is a
+one-line change per agent if the price/quality tradeoff shifts.
 
 ### Fixing rows in parallel
 

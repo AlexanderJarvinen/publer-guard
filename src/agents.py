@@ -315,7 +315,7 @@ class TriageAgent:
     auto_fixable, message. No row text, no media URLs, no CSV content.
     """
 
-    MODEL = "claude-haiku-4-5"
+    MODEL = os.environ.get("TRIAGE_MODEL", "claude-haiku-4-5")
 
     def __init__(self, client: LLMClient) -> None:
         self._client = client
@@ -349,7 +349,7 @@ class FixerAgent:
     cannot write a fabricated URL regardless of what the model outputs.
     """
 
-    MODEL = "claude-sonnet-4-6"
+    MODEL = os.environ.get("FIXER_MODEL", "claude-sonnet-4-6")
 
     def __init__(self, client: LLMClient) -> None:
         self._client = client
@@ -395,7 +395,7 @@ class CriticAgent:
     the rejected proposal, and the gate failure reason. Nothing else.
     """
 
-    MODEL = "claude-opus-4-8"
+    MODEL = os.environ.get("CRITIC_MODEL", "claude-opus-4-8")
 
     def __init__(self, client: LLMClient) -> None:
         self._client = client
