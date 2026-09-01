@@ -20,6 +20,15 @@ ignore = ["UP042"]
 [tool.ruff.lint.isort]
 known-first-party = ["src"]
 
+[tool.coverage.run]
+source = ["src"]
+
+[tool.coverage.report]
+# The deterministic core (linter, verifier, tools, state) sits at 95-100%;
+# the Flask/CLI I/O shells are exercised by the eval harness and by hand.
+# The CI gate keeps the total from silently degrading.
+fail_under = 65
+
 [tool.mypy]
 python_version = "3.12"
 files = ["src"]

@@ -24,8 +24,8 @@ jobs:
       - name: Type check
         run: mypy
 
-      - name: Run tests
-        run: pytest -q
+      - name: Run tests (with coverage gate)
+        run: pytest -q --cov=src
 
       # The eval harness runs the full pipeline against 6 known CSV cases
       # using FakeLLMClient — deterministic, no API key, no cost.

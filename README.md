@@ -83,6 +83,7 @@ Everything below is reproducible offline — CI re-checks it on every push.
 |---|---|---|
 | Unit tests | **234 passing** | `pytest` — linter rules, verifier gates, agents (against a fake LLM), ingestion, failure handling |
 | Eval scenarios | **7/7 passing** | `python -m eval.runner` — full pipeline runs on known CSVs with pinned expected outcomes |
+| Coverage of the verdict core | **95–100%** | `pytest --cov` — linter 100%, tools 100%, state 96%, verifier 95%; the code that decides pass/fail is fully tested. 66% overall incl. UI/CLI shells, gated in CI |
 | First-attempt fix rate | **67%** | 4 of 6 auto-fixable violations fixed on the Fixer's first proposal |
 | LLM calls on a clean file | **0** | The linter finds nothing, so no agent is ever invoked |
 | Parallel row fixing | **45s → 11s** | Six independent CTA repairs, before/after `MAX_PARALLEL_ROWS` |
