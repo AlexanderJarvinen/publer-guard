@@ -4,6 +4,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)
 
+**Live demo:** [publer-guard-production.up.railway.app](https://publer-guard-production.up.railway.app/)
+— try it with any CSV from [`eval/`](eval/) (rate-limited; runs on a real
+multi-agent pipeline, so a file with violations takes ~a minute).
+
 A multi-agent system that turns a hand-filled content plan into
 **validated, import-ready Publer CSVs**. It ingests the plan, slices it
 into per-platform files, checks every row against a set of **mechanical,
