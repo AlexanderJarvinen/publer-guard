@@ -21,6 +21,9 @@ jobs:
       - name: Lint
         run: ruff check src tests eval mutation_check.py
 
+      - name: Type check
+        run: mypy
+
       - name: Run tests
         run: pytest -q
 

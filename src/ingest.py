@@ -31,7 +31,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from .state import CsvRow, Platform
 
@@ -375,7 +375,9 @@ def _xlrd_string_record_contents(self, data: bytes) -> str:
     lenlen = (bv >= 30) + 1
     nchars_expected = unpack("<" + "BH"[lenlen - 1], data[:lenlen])[0]
     offset = lenlen
-    enc = bk.encoding or bk.derive_encoding() if bv < 80 else None
+    # BIFF8 (bv >= 80) re-derives enc from each chunk's flag byte in the
+    # loop below; the initial value is only read on older BIFF versions.
+    enc: str = (bk.encoding or bk.derive_encoding()) if bv < 80 else "latin_1"
 
     nchars_found = 0
     result = ""
@@ -512,14 +514,14 @@ def _read_ods(path: Path) -> _Grid:
     if sheet is None:
         return _Grid([])
 
-    def cell_text(cell: object) -> str:
+    def cell_text(cell: Any) -> str:
         """Visible text of an ODF cell: its <text:p> paragraphs, joined."""
         parts = []
         for p in cell.getElementsByType(P):
             parts.append(str(p))
         return "\n".join(parts).strip()
 
-    def parse_cell(cell: object) -> _Cell:
+    def parse_cell(cell: Any) -> _Cell:
         """One ODF cell → the format-blind _Cell the slicer reads."""
         vtype = cell.getAttribute("valuetype")
         out = _Cell()

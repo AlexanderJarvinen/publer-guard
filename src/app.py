@@ -106,7 +106,7 @@ def _run_one(uploaded: FileStorage, platform: Platform, max_retries: int) -> dic
         state = orch.run(state)
 
         _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        stem = Path(uploaded.filename).stem
+        stem = Path(uploaded.filename or "upload").stem
         fixed_path = _unique_output_path(f"{stem}_fixed.csv")
         fixed_name = fixed_path.name
         write_fixed_csv(fixed_path, state.rows, raw_rows)
@@ -298,7 +298,10 @@ def run() -> Response | tuple[Response, int]:
     if len(platforms) != len(files):
         return jsonify({"error": "Каждому файлу должна соответствовать платформа"}), 400
 
-    non_csv = [f.filename for f in files if not f.filename.lower().endswith(".csv")]
+    non_csv = [
+        f.filename or "?" for f in files
+        if not (f.filename or "").lower().endswith(".csv")
+    ]
     if non_csv:
         return jsonify({"error": "Только .csv файлы: " + ", ".join(non_csv)}), 400
 

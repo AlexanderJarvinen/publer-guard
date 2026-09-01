@@ -116,7 +116,12 @@ class AnthropicClient:
             latency_ms=round(latency_ms, 1),
             estimated=False,
         ))
-        return msg.content[0].text
+        # The first block is not guaranteed to be text (thinking-enabled
+        # models emit thinking blocks first) — take the first text block.
+        for block in msg.content:
+            if block.type == "text":
+                return block.text
+        raise ValueError(f"Anthropic response from {model} contained no text block")
 
 
 class FakeLLMClient:
