@@ -738,6 +738,23 @@ class MissingHashtags(PlanWarning):
                 f"Пожалуйста, проверьте.")
 
 
+@dataclass(frozen=True)
+class MalformedHashtags(PlanWarning):
+    """A hashtag cell with content but not a single `#` in it.
+
+    `arcticdreams metal` instead of `#arcticdreams #metal` publishes as
+    plain trailing words — technically fine, almost certainly a typo.
+    Purely mechanical: the check is "does the cell contain `#` at all",
+    never "are these the right hashtags".
+    """
+    kind: ClassVar[str] = "malformed_hashtags"
+
+    def message(self) -> str:
+        return (f"{self.unit}, строка {self.sheet_row}: в поле "
+                f"{', '.join(self.labelled())} есть текст, но нет ни одного "
+                f"«#» — теги уйдут как обычные слова. Пожалуйста, проверьте.")
+
+
 @dataclass
 class PlanSlices:
     """Everything one pass over a content plan produced."""
@@ -874,6 +891,10 @@ def slice_plan(path: Path, source_name: Optional[str] = None) -> PlanSlices:
                 # Nothing wrong with the post; it just has no hashtags.
                 out.warnings.append(
                     MissingHashtags(spec.suffix, r + 1, (spec.hashtags,))
+                )
+            if spec.hashtags and hashtags and "#" not in hashtags:
+                out.warnings.append(
+                    MalformedHashtags(spec.suffix, r + 1, (spec.hashtags,))
                 )
 
         # Not one started row -> the unit wasn't planned, so no file.

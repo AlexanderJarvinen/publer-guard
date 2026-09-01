@@ -145,17 +145,15 @@ class Verifier:
         if before["has_media"] and not after["has_media"]:
             return "Gate 2: content_preservation — media_url was removed by the fix"
 
-        # 2b. Every hashtag present before must survive the fix (fixing
-        #     hashtags_2084 itself is exempt — that fixer ADDS hashtags).
-        if violation.rule_id != "hashtags_2084":
-            before_tags = {h.lower() for h in before["hashtags"]}
-            after_tags = {h.lower() for h in after["hashtags"]}
-            removed = before_tags - after_tags
-            if removed:
-                return (
-                    f"Gate 2: content_preservation — hashtags removed by fix: "
-                    f"{', '.join(sorted(removed))}"
-                )
+        # 2b. Every hashtag present before must survive the fix.
+        before_tags = {h.lower() for h in before["hashtags"]}
+        after_tags = {h.lower() for h in after["hashtags"]}
+        removed = before_tags - after_tags
+        if removed:
+            return (
+                f"Gate 2: content_preservation — hashtags removed by fix: "
+                f"{', '.join(sorted(removed))}"
+            )
 
         # 2c. CTA handle must remain if it was there and we weren't asked to reformat it.
         if _CTA_HANDLE in original.text and violation.rule_id != "cta_format":

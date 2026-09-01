@@ -178,6 +178,7 @@ def _ingestion_report(sliced: PlanSlices) -> dict:
         "warnings": len(sliced.warnings),
         "incomplete_rows": kinds["incomplete"],
         "posts_without_hashtags": kinds["no_hashtags"],
+        "malformed_hashtags": kinds["malformed_hashtags"],
         # Busiest units first — that's where the plan needs attention.
         "by_unit": sorted(by_unit.values(), key=lambda e: -e["count"]),
         # Named from the specs, not from the warnings: a unit can end up with

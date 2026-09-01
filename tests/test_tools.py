@@ -56,6 +56,11 @@ class TestRealFixture:
     def test_id_fragment_from_path_finds_entry(self):
         assert lookup_media("6a2b5c401b935b23ddb5bc7a") == _CDN_LETARGIN
 
+    def test_uppercase_hint_matches_lowercase_path(self):
+        # Path matching must be case-insensitive like name matching:
+        # an uppercased path fragment still finds the entry.
+        assert lookup_media("84791791CA0C92F1ACEA4D46A9EAD09B") == _CDN_2084
+
     def test_case_insensitive_name_match(self):
         assert lookup_media("2084_PART2_ROOM101.MP4") == _CDN_2084
 

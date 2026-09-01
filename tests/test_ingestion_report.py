@@ -23,6 +23,7 @@ def test_nothing_wrong_reports_zero():
     assert report["warnings"] == 0
     assert report["incomplete_rows"] == 0
     assert report["posts_without_hashtags"] == 0
+    assert report["malformed_hashtags"] == 0
     assert report["by_unit"] == []
 
 

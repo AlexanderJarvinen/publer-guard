@@ -60,7 +60,7 @@ def lookup_media(hint: str, _fixture_path: Path | None = None) -> str | None:
     matches = [
         e for e in entries
         if hint_lower in e.get("name", "").lower()
-        or hint_lower in e.get("path", "")
+        or hint_lower in e.get("path", "").lower()
     ]
 
     # Exactly one match required — zero or multiple both escalate to human

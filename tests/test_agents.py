@@ -254,17 +254,17 @@ class TestFixerAgent:
         assert other_text_b not in prompt
 
     def test_violation_details_included_in_prompt(self):
-        v = _violation(rule_id="hashtags_2084", message="Row 2: missing #orwell")
+        v = _violation(rule_id="twitter_length", message="Row 2: post is 300 chars")
         r = _row(row_index=2)
         resp = json.dumps({
-            "action": "edit_text", "new_text": "x #orwell",
-            "lookup_hint": None, "reason": "added hashtag",
+            "action": "edit_text", "new_text": "shorter",
+            "lookup_hint": None, "reason": "trimmed",
         })
         fake = FakeLLMClient([resp])
         FixerAgent(fake).propose_fix(v, r)
         prompt = fake.last_user
-        assert "hashtags_2084" in prompt
-        assert "missing #orwell" in prompt
+        assert "twitter_length" in prompt
+        assert "post is 300 chars" in prompt
 
 
 # ---------------------------------------------------------------------------

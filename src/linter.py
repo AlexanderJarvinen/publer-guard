@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
-from .state import CsvRow, Platform, Severity, Violation, _extract_hashtags
+from .state import CsvRow, Platform, Severity, Violation
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -29,18 +29,6 @@ _DATE_ONLY_FORMAT = "%Y/%m/%d"
 # template (ingest.PUBLER_HEADER); the first six columns carry the data.
 _EXPECTED_COLUMNS = 12
 _TWITTER_MAX_CHARS = 280
-
-# 2084 series: Label contains this string (case-insensitive) — user-tunable here
-_SERIES_2084_MARKER = "2084"
-
-# Baseline required hashtag set for 2084 series posts
-_REQUIRED_2084_HASHTAGS: frozenset[str] = frozenset({
-    "#arcticdreams",
-    "#2084",
-    "#orwell",
-    "#extrememetal",
-    "#blackeneddeathmetal",
-})
 
 _CTA_HANDLE = "alex_y_yarvinen"
 _CTA_FLAT_URL = f"instagram.com/{_CTA_HANDLE}"
@@ -290,36 +278,7 @@ def check_cta_format(row: CsvRow) -> list[Violation]:
 
 
 # ---------------------------------------------------------------------------
-# Rule 7 — hashtags_2084
-# ---------------------------------------------------------------------------
-
-def _is_2084_row(row: CsvRow) -> bool:
-    # Membership determined solely by Label containing "2084" (case-insensitive)
-    return _SERIES_2084_MARKER.lower() in row.label.lower()
-
-
-def check_hashtags_2084(row: CsvRow) -> list[Violation]:
-    """2084 series rows must contain all required hashtags."""
-    if not _is_2084_row(row):
-        return []
-    present = {h.lower() for h in _extract_hashtags(row.text)}
-    missing = _REQUIRED_2084_HASHTAGS - present
-    if missing:
-        return [Violation(
-            rule_id="hashtags_2084",
-            row_index=row.row_index,
-            severity=Severity.ERROR,
-            message=(
-                f"Row {row.row_index}: 2084 series post is missing required hashtags: "
-                f"{', '.join(sorted(missing))}."
-            ),
-            auto_fixable=True,
-        )]
-    return []
-
-
-# ---------------------------------------------------------------------------
-# Rule 8 — no_cyrillic (except Telegram)
+# Rule 7 — no_cyrillic (except Telegram)
 # ---------------------------------------------------------------------------
 
 def check_no_cyrillic(row: CsvRow) -> list[Violation]:
@@ -362,7 +321,6 @@ _PER_ROW_CHECKS = (
     check_media_url_permanent,
     check_twitter_length,
     check_cta_format,
-    check_hashtags_2084,
     check_no_cyrillic,
 )
 

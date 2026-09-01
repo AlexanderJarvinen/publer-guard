@@ -16,7 +16,6 @@ from src.linter import (
     check_media_url_permanent,
     check_twitter_length,
     check_cta_format,
-    check_hashtags_2084,
     check_no_cyrillic,
     lint_row,
 )
@@ -392,69 +391,7 @@ class TestCtaFormat:
 
 
 # ===========================================================================
-# Rule 7 — hashtags_2084
-# ===========================================================================
-
-_ALL_2084_HASHTAGS = (
-    "#arcticdreams #2084 #orwell #extrememetal #blackeneddeathmetal"
-)
-
-
-class TestHashtags2084:
-    def test_all_hashtags_present_is_clean(self):
-        assert check_hashtags_2084(_row(
-            label="2084 announcement",
-            text=f"Post text. {_ALL_2084_HASHTAGS}",
-        )) == []
-
-    def test_missing_hashtags_fire(self):
-        v = check_hashtags_2084(_row(
-            label="2084 announcement",
-            text="#arcticdreams #2084 only two",
-        ))
-        assert len(v) == 1
-        assert v[0].rule_id == "hashtags_2084"
-
-    def test_missing_message_names_the_absent_hashtags(self):
-        v = check_hashtags_2084(_row(
-            label="2084 announcement",
-            text="#arcticdreams #2084 only two",
-        ))
-        assert "#orwell" in v[0].message
-        assert "#extrememetal" in v[0].message
-        assert "#blackeneddeathmetal" in v[0].message
-
-    def test_non_2084_label_never_fires(self):
-        # Even with zero hashtags, a non-2084 post is fine
-        assert check_hashtags_2084(_row(label="promo", text="No hashtags here")) == []
-
-    def test_empty_label_never_fires(self):
-        assert check_hashtags_2084(_row(label="", text="No hashtags")) == []
-
-    def test_label_detection_is_case_insensitive(self):
-        v = check_hashtags_2084(_row(label="2084 BAND", text="No hashtags"))
-        assert len(v) == 1
-        assert v[0].rule_id == "hashtags_2084"
-
-    def test_hashtag_matching_is_case_insensitive(self):
-        assert check_hashtags_2084(_row(
-            label="2084 chapter",
-            text="#ArcticDreams #2084 #ORWELL #ExtremeMetal #BlackenedDeathMetal",
-        )) == []
-
-    def test_label_containing_2084_anywhere_triggers(self):
-        # "my2084project" should still trigger (substring match)
-        v = check_hashtags_2084(_row(label="my2084project", text="no tags"))
-        assert len(v) == 1
-
-    def test_all_five_missing_fires_once(self):
-        v = check_hashtags_2084(_row(label="2084", text="no hashtags at all"))
-        assert len(v) == 1
-        assert v[0].rule_id == "hashtags_2084"
-
-
-# ===========================================================================
-# Rule 8 — no_cyrillic
+# Rule 7 — no_cyrillic
 # ===========================================================================
 
 class TestNoCyrillic:
@@ -537,15 +474,6 @@ class TestLintRow:
         assert "link_empty" in rule_ids
         assert "media_url_permanent" in rule_ids
         assert "twitter_length" in rule_ids
-
-    def test_2084_row_missing_hashtags_fires_via_lint_row(self):
-        r = _row(
-            platform=Platform.FACEBOOK,
-            label="2084 announcement",
-            text="New 2084 chapter. IG: instagram.com/alex_y_yarvinen",
-        )
-        rule_ids = {v.rule_id for v in lint_row(r)}
-        assert "hashtags_2084" in rule_ids
 
     def test_cyrillic_on_facebook_fires_via_lint_row(self):
         r = _row(platform=Platform.FACEBOOK, text="Нова глава је објављена")

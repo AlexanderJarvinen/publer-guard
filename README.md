@@ -69,7 +69,7 @@ Neither the test suite nor the eval harness needs an API key — both run agains
 a fake LLM client, so a fresh clone can verify the whole pipeline offline:
 
 ```bash
-pytest                  # 243 tests
+pytest                  # 234 tests
 python -m eval.runner   # 7 known cases; prints the first-attempt fix rate
 ```
 
@@ -81,7 +81,7 @@ Everything below is reproducible offline — CI re-checks it on every push.
 
 | Metric | Value | Where it comes from |
 |---|---|---|
-| Unit tests | **243 passing** | `pytest` — linter rules, verifier gates, agents (against a fake LLM), ingestion, failure handling |
+| Unit tests | **234 passing** | `pytest` — linter rules, verifier gates, agents (against a fake LLM), ingestion, failure handling |
 | Eval scenarios | **7/7 passing** | `python -m eval.runner` — full pipeline runs on known CSVs with pinned expected outcomes |
 | First-attempt fix rate | **67%** | 4 of 6 auto-fixable violations fixed on the Fixer's first proposal |
 | LLM calls on a clean file | **0** | The linter finds nothing, so no agent is ever invoked |
@@ -223,7 +223,8 @@ Rules of the conversion:
 - **Gaps come back as warnings, not as deletions.** Each names the unit, the
   1-based sheet row and the empty cells. A finished post with no hashtags
   warns too — optional, published either way, but more often an oversight
-  than a decision.
+  than a decision. So does a hashtag cell with content but not a single
+  `#` in it (`arcticdreams metal`) — the tags would publish as plain words.
 - **A half-finished CSV says so where it is downloaded.** The file carries how
   many posts it holds and which plan rows still have gaps, because a warning
   elsewhere on the page is too easy to import straight past.
@@ -240,11 +241,11 @@ official bulk-import template: `utf-8-sig` (BOM), comma-delimited, exactly
 | # | Column (template header)                         | Used by rule / role |
 |---|--------------------------------------------------|---------------------|
 | 0 | `Date - Intl. format or prompt`                  | `date_format` — `YYYY/MM/DD HH:MM`, or `YYYY/MM/DD` when the hour is left to Publer |
-| 1 | `Text`                                           | `twitter_length`, `cta_format`, `hashtags_2084`, `no_cyrillic` — the published caption (hashtags merged in) |
+| 1 | `Text`                                           | `twitter_length`, `cta_format`, `no_cyrillic` — the published caption (hashtags merged in) |
 | 2 | `Link(s) - Separated by comma for FB carousels`  | `link_empty` — must be empty |
 | 3 | `Media URL(s) - Separated by comma`              | `media_url_permanent` — no `/uploads/tmp/` |
 | 4 | `Title - For the video, pin, PDF ..`             | video/pin title |
-| 5 | `Label(s) - Separated by comma`                  | 2084-series detection (Label contains `2084`) |
+| 5 | `Label(s) - Separated by comma`                  | Publer labels, passed through |
 | 6 | `Alt text(s) - Separated by \|\|`                | — |
 | 7 | `Comment(s) - Separated by \|\|`                 | — |
 | 8 | `Pin board, FB album, or Google category`        | — |
@@ -410,7 +411,7 @@ is rejected. The Fixer cannot "argue" that it fixed something.
 The classic reward-hacking mode: to get a Twitter post under 280 chars,
 the Fixer quietly deletes the hashtags or the CTA. Caught by comparing
 `CsvRow.content_fingerprint()` before and after: if a required element
-(the 2084 hashtag set, the CTA, the media) disappeared, the edit is
+(the row's hashtags, the CTA, the media) disappeared, the edit is
 rejected even though the length rule now "passes."
 
 ### Gate 3 — No fabrication

@@ -203,6 +203,27 @@ def test_optional_fields_are_not_required(stub_open, tmp_path):
     )
 
 
+def test_hashtag_cell_without_a_single_hash_warns(stub_open, tmp_path):
+    """`arcticdreams metal` instead of `#arcticdreams #metal` — the tags
+    would publish as plain words. Mechanical check: no `#` in the cell."""
+    r1 = fb_post_row(12)
+    put(r1, "H", text="arcticdreams metal")
+
+    stub_open([r1])
+    sliced = slice_plan(tmp_path / "PLAN.ods")
+
+    (warning,) = sliced.warnings
+    assert warning.kind == "malformed_hashtags"
+    assert warning.columns == ("H",)
+    assert "нет ни одного" in warning.message()
+
+
+def test_hashtag_cell_with_hashes_does_not_warn(stub_open, tmp_path):
+    r1 = fb_post_row(12)   # H already holds "#arcticdreams"
+    stub_open([r1])
+    assert slice_plan(tmp_path / "PLAN.ods").warnings == []
+
+
 def test_a_unit_with_no_hashtag_column_never_warns(stub_open, tmp_path):
     """TELEGRAMM has no hashtags column in the layout at all."""
     r1 = blank_row()

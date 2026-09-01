@@ -66,13 +66,6 @@ MUTANTS = [
         green="tests/test_linter.py::TestCtaFormat::test_twitter_markdown_link_fires",
     ),
     dict(
-        name="hashtags_2084: series detection always false",
-        find='    return _SERIES_2084_MARKER.lower() in row.label.lower()',
-        repl='    return False',
-        red="tests/test_linter.py::TestHashtags2084::test_missing_hashtags_fire",
-        green="tests/test_linter.py::TestHashtags2084::test_non_2084_label_never_fires",
-    ),
-    dict(
         name="no_cyrillic: disabled entirely",
         find='    if _CYRILLIC_RE.search(row.text):',
         repl='    if False and _CYRILLIC_RE.search(row.text):',

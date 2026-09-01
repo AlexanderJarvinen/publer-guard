@@ -1002,7 +1002,10 @@
         <b style="color:var(--yellow-t)">${ing.incomplete_rows}</b> ${plural(ing.incomplete_rows,
           'строка не дозаполнена', 'строк не дозаполнено')},
         <b>${ing.posts_without_hashtags}</b> ${plural(ing.posts_without_hashtags,
-          'пост без хэштегов', 'постов без хэштегов')}.
+          'пост без хэштегов', 'постов без хэштегов')}${
+        (ing.malformed_hashtags || 0) > 0 ? `,
+        <b style="color:var(--yellow-t)">${ing.malformed_hashtags}</b> ${plural(ing.malformed_hashtags,
+          'ячейка хэштегов без «#»', 'ячеек хэштегов без «#»')}` : ''}.
         Полностью пустые строки не в счёт — там единицу контента просто не планировали.
       </p>
       ${warn}

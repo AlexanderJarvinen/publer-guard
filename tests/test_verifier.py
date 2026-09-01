@@ -105,17 +105,6 @@ class TestHappyPath:
         assert result.new_row is not None
         assert result.new_row.media_url == _CDN_URL_2
 
-    def test_edit_text_fixes_hashtags_2084(self):
-        v = Verifier()
-        original_text = "New 2084 chapter."
-        fixed_text = f"New 2084 chapter. {_ALL_2084_TAGS}"
-        result = v.verify(
-            _row(label="2084 announcement", text=original_text),
-            _violation(rule_id="hashtags_2084"),
-            FixProposal(action="edit_text", new_text=fixed_text, reason="added hashtags"),
-        )
-        assert result.accepted
-
     def test_edit_text_fixes_no_cyrillic(self):
         v = Verifier()
         result = v.verify(
@@ -298,25 +287,6 @@ class TestGate2:
                 action="edit_text",
                 new_text="IG: instagram.com/alex_y_yarvinen",
                 reason="converted markdown to flat URL",
-            ),
-        )
-        assert result.accepted
-
-    def test_hashtag_preservation_skipped_when_fixing_hashtags_2084(self):
-        # When fixing hashtags_2084 itself, the original was MISSING them.
-        # Gate 2 must not block the fix for "didn't have them before".
-        result = Verifier().verify(
-            _row(
-                label="2084 announcement",
-                text="2084 chapter. IG: instagram.com/alex_y_yarvinen",
-            ),
-            _violation(rule_id="hashtags_2084"),
-            FixProposal(
-                action="edit_text",
-                new_text=(
-                    f"2084 chapter. IG: instagram.com/alex_y_yarvinen {_ALL_2084_TAGS}"
-                ),
-                reason="added required hashtags",
             ),
         )
         assert result.accepted

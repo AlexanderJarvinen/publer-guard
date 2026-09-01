@@ -6,7 +6,7 @@ No API calls, no cost, fully reproducible.
 
 Outputs:
   PASS / FAIL per case
-  Total: N/6 passed
+  Total: N/7 passed
   First-attempt fix rate (the degradation metric to watch)
 
 Run from the project root:
@@ -32,7 +32,6 @@ from src.verifier import Verifier
 
 EVAL_DIR = Path(__file__).parent
 
-_ALL_2084_TAGS = "#arcticdreams #2084 #orwell #extrememetal #blackeneddeathmetal"
 _CDN_2084 = (
     "https://cdn.publer.com/uploads/videos/"
     "6a3711e930d9b2bc52422eff/"
@@ -280,40 +279,44 @@ def case_04_twitter_length() -> tuple[PipelineState, Expectation]:
     return state, exp
 
 
-# ── Case 05: hashtags_2084 — fixed on 2nd attempt via Critic ─────────────────
+# ── Case 05: twitter_length — fixed on 2nd attempt via Critic ────────────────
 #
 # Demonstrates the Critic path:
-#   Attempt 1: Fixer adds hashtags but drops the CTA handle → Gate 2 rejects
-#   Critic:    "Keep the CTA handle instagram.com/alex_y_yarvinen"
-#   Attempt 2: Fixer adds hashtags AND keeps CTA → accepted
+#   Attempt 1: Fixer shortens the post but drops #arcticdreams → Gate 2 rejects
+#   Critic:    "Keep every hashtag; trim the prose instead"
+#   Attempt 2: Fixer shortens AND keeps all hashtags + CTA → accepted
 
-def case_05_hashtags_critic() -> tuple[PipelineState, Expectation]:
-    # Attempt 1: Fixer drops the CTA to keep text short — Gate 2 will reject
-    bad_fix = f"New 2084 chapter. Room 101 awaits. {_ALL_2084_TAGS}"
-    # Attempt 2: Fixer keeps CTA — accepted
-    good_fix = (
-        f"New 2084 chapter. Room 101 awaits. "
-        f"IG: instagram.com/alex_y_yarvinen {_ALL_2084_TAGS}"
+def case_05_length_critic() -> tuple[PipelineState, Expectation]:
+    # Attempt 1: Fixer trims by sacrificing a hashtag — Gate 2 will reject
+    bad_fix = (
+        "New chapter is out now. Room 101 awaits. Descend with us. "
+        "IG: instagram.com/alex_y_yarvinen #extrememetal"
     )
+    # Attempt 2: Fixer trims the prose, keeps every hashtag and the CTA
+    good_fix = (
+        "New chapter is out now. Room 101 awaits. Descend with us. "
+        "IG: instagram.com/alex_y_yarvinen #arcticdreams #extrememetal"
+    )
+    assert len(good_fix) <= 280, f"good_fix is {len(good_fix)} chars — over limit!"
 
     llm_responses = [
         # Triage
-        _triage_resp(fix_order=[{"rule_id": "hashtags_2084", "row_index": 0}]),
-        # Fixer attempt 1 (bad — no CTA)
-        _fixer_edit_text(bad_fix, "Added required hashtags."),
+        _triage_resp(fix_order=[{"rule_id": "twitter_length", "row_index": 0}]),
+        # Fixer attempt 1 (bad — dropped #arcticdreams)
+        _fixer_edit_text(bad_fix, "Trimmed to fit 280 chars."),
         # Critic (called after Gate 2 rejects attempt 1)
         _critic_resp(
             explanation=(
-                "The fix removed 'instagram.com/alex_y_yarvinen' from the text. "
-                "Gate 2 (content_preservation) requires the CTA handle to remain."
+                "The fix removed '#arcticdreams' from the text. Gate 2 "
+                "(content_preservation) requires every original hashtag to remain."
             ),
             suggestion=(
-                "Keep 'IG: instagram.com/alex_y_yarvinen' in the text. "
-                "Place the hashtags after it."
+                "Shorten the prose instead. Keep '#arcticdreams #extrememetal' "
+                "and the CTA at the end."
             ),
         ),
-        # Fixer attempt 2 (good — CTA kept)
-        _fixer_edit_text(good_fix, "Added hashtags while preserving the CTA handle."),
+        # Fixer attempt 2 (good — everything kept)
+        _fixer_edit_text(good_fix, "Trimmed prose while keeping hashtags and CTA."),
     ]
     fake = FakeLLMClient(llm_responses)
     orch = Orchestrator(
@@ -322,7 +325,7 @@ def case_05_hashtags_critic() -> tuple[PipelineState, Expectation]:
         critic=CriticAgent(fake),
     )
     state = orch.run(
-        _load_state("05_hashtags_critic.csv", Platform.FACEBOOK,
+        _load_state("05_length_critic.csv", Platform.TWITTER,
                     max_retries_per_violation=2)
     )
     exp = Expectation(
@@ -365,7 +368,7 @@ CASES = [
     ("02_no_cyrillic",        case_02_no_cyrillic,   "no_cyrillic fixed first try"),
     ("03_tmp_url_found",      case_03_tmp_url_found, "media_url_permanent fixed via lookup_media"),
     ("04_twitter_length",     case_04_twitter_length,"twitter_length fixed first try"),
-    ("05_hashtags_critic",    case_05_hashtags_critic,"hashtags_2084 fixed on 2nd attempt (Critic path)"),
+    ("05_length_critic",      case_05_length_critic, "twitter_length fixed on 2nd attempt (Critic path)"),
     ("06_lookup_not_found",   case_06_lookup_not_found,"media_url_permanent escalated (lookup=None)"),
 ]
 
